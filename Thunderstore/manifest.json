@@ -2,7 +2,7 @@
   "name": "WarfareTweaks",
   "version_number": "1.0.0",
   "website_url": "https://discord.gg/pdHgy6Bsng",
-  "description": "Standalone Warfare compatibility and tuning module for Valheim.",
+  "description": "Tunes Therzie Warfare and WarfareFireAndIce weapon effects from server-synced YAML, assigning native effects to any prefab while guarding generated hits, shield contexts, and Chain Lightning duplicate-damage edge cases for cleaner multiplayer tuning.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2202"
   ]
