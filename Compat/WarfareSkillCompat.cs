@@ -49,6 +49,7 @@ internal static class WarfareSkillCompat
             ["ScytheVampiric_TW"] = Skills.SkillType.Polearms
         };
 
+    private static readonly Dictionary<string, Type> LoadedTypesByName = new(StringComparer.Ordinal);
     private static bool _hooksInstalled;
 
     internal static void TryInstallHooks()
@@ -133,8 +134,11 @@ internal static class WarfareSkillCompat
             Skills.SkillType previousSkillType = sharedData.m_skillType;
             sharedData.m_skillType = skillType;
             reassignedCount++;
-            WarfareThrowableCompat.LogDebug(
-                $"Reassigned Warfare skill prefab={GetPrefabName(itemPrefab)} shared={sharedData.m_name} {previousSkillType}->{skillType}");
+            if (WarfareThrowableCompat.DebugLoggingEnabled)
+            {
+                WarfareThrowableCompat.LogDebug(
+                    $"Reassigned Warfare skill prefab={GetPrefabName(itemPrefab)} shared={sharedData.m_name} {previousSkillType}->{skillType}");
+            }
         }
 
         if (reassignedCount > 0)
@@ -211,8 +215,12 @@ internal static class WarfareSkillCompat
         float skillFactor = Player.m_localPlayer.GetSkillFactor(Skills.SkillType.Axes);
         projVelocity *= 1f + skillFactor;
         projectileAccuracy *= 1f + skillFactor;
-        WarfareThrowableCompat.LogDebug(
-            $"Replaced Warfare throwing projectile bonus with Axes factor={skillFactor} item={DescribeWeapon(a.m_weapon)}");
+        if (WarfareThrowableCompat.DebugLoggingEnabled)
+        {
+            WarfareThrowableCompat.LogDebug(
+                $"Replaced Warfare throwing projectile bonus with Axes factor={skillFactor} item={DescribeWeapon(a.m_weapon)}");
+        }
+
         return false;
     }
 
@@ -278,11 +286,23 @@ internal static class WarfareSkillCompat
 
     private static Type? FindLoadedType(string fullTypeName)
     {
+        string typeName = fullTypeName?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(typeName))
+        {
+            return null;
+        }
+
+        if (LoadedTypesByName.TryGetValue(typeName, out Type? cachedType))
+        {
+            return cachedType;
+        }
+
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            Type? type = assembly.GetType(fullTypeName, throwOnError: false);
+            Type? type = assembly.GetType(typeName, throwOnError: false);
             if (type != null)
             {
+                LoadedTypesByName[typeName] = type;
                 return type;
             }
         }

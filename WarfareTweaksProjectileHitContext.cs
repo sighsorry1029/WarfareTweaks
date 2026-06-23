@@ -3,7 +3,7 @@ namespace WarfareTweaks;
 internal static class WarfareTweaksProjectileHitContext
 {
     [System.ThreadStatic]
-    private static ProjectileHitContext? _current;
+    private static Projectile? _currentProjectile;
 
     internal static Scope Begin(Projectile projectile)
     {
@@ -12,46 +12,47 @@ internal static class WarfareTweaksProjectileHitContext
             return default;
         }
 
-        ProjectileHitContext previous = _current!;
-        _current = new ProjectileHitContext(projectile);
+        Projectile? previous = _currentProjectile;
+        _currentProjectile = projectile;
         return new Scope(previous);
     }
 
     internal static void End(Scope scope)
     {
-        _current = scope.Previous;
+        _currentProjectile = scope.Previous;
     }
 
-    internal static bool TryPeek(out ProjectileHitContext? context)
+    internal static bool TryPeek(out ProjectileHitContext context)
     {
-        context = _current;
-        return context != null;
+        Projectile? projectile = _currentProjectile;
+        context = projectile != null ? new ProjectileHitContext(projectile) : default;
+        return projectile != null;
     }
 
     internal readonly struct Scope
     {
-        internal Scope(ProjectileHitContext? previous)
+        internal Scope(Projectile? previous)
         {
             Previous = previous;
         }
 
-        internal ProjectileHitContext? Previous { get; }
+        internal Projectile? Previous { get; }
     }
 }
 
-internal sealed class ProjectileHitContext
+internal readonly struct ProjectileHitContext
 {
     public ProjectileHitContext(Projectile projectile)
     {
         Projectile = projectile;
     }
 
-    public Projectile Projectile { get; }
+    public Projectile? Projectile { get; }
 }
 
 internal static class WarfareTweaksRuntimeContext
 {
-    internal static bool TryPeekProjectileHitContext(out ProjectileHitContext? context)
+    internal static bool TryPeekProjectileHitContext(out ProjectileHitContext context)
     {
         return WarfareTweaksProjectileHitContext.TryPeek(out context);
     }
@@ -82,19 +83,4 @@ internal static class WeaponEffectManager
         return DirectWeaponHitContextSystem.TryGetCurrentProjectileWeaponPrefabName(out string prefabName) &&
                WarfareCompat.ShouldSuppressBuiltIn(prefabName, effectId);
     }
-}
-
-internal static class LaunchSlamSystem
-{
-    internal static bool IsApplyingLandingDamage => false;
-}
-
-internal static class KnockbackChainSystem
-{
-    internal static bool IsApplyingChainDamage => false;
-}
-
-internal static class MeleeProjectileHitCascadeSystem
-{
-    internal static bool IsApplyingImpactBurstDamage => false;
 }

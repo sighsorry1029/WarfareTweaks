@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 
@@ -8,66 +8,206 @@ namespace WarfareTweaks;
 
 internal static class ChainLightningDedupSystem
 {
+    private const float VanillaLightningDamage = 75f;
     private const float VanillaChainChancePerTarget = 0.3f;
-    private const float DuplicateHitWindow = 0.35f;
-    private static readonly FieldInfo? AoeOwnerField = AccessTools.Field(typeof(Aoe), "m_owner");
-    private static readonly Dictionary<ChainLightningHitKey, float> RecentHits = new();
-    private static bool _loggedChainRestore;
+    private static readonly ConditionalWeakTable<Aoe, ChainLightningAoeState> AoeStates = new();
+    private static bool _loggedVanillaRestore;
+    private static int _nextActivationId;
 
-    internal static void RestoreVanillaChainChance(ZNetScene scene)
+    [ThreadStatic]
+    private static ChainLightningActivation? ActiveActivation;
+
+    internal static void RestoreVanillaChainLightningBehavior(ZNetScene scene)
     {
         GameObject? prefab = scene != null ? scene.GetPrefab("ChainLightning") : null;
         Aoe? aoe = prefab != null ? prefab.GetComponent<Aoe>() ?? prefab.GetComponentInChildren<Aoe>(true) : null;
-        if (aoe == null || aoe.m_chainChancePerTarget > 0f)
+        if (aoe == null)
         {
             return;
         }
 
+        bool changed = !Mathf.Approximately(aoe.m_damage.m_lightning, VanillaLightningDamage) ||
+                       !Mathf.Approximately(aoe.m_chainChancePerTarget, VanillaChainChancePerTarget);
+        aoe.m_damage.m_lightning = VanillaLightningDamage;
         aoe.m_chainChancePerTarget = VanillaChainChancePerTarget;
-        if (!_loggedChainRestore)
+        if (changed && !_loggedVanillaRestore)
         {
-            _loggedChainRestore = true;
-            WarfareTweaksPlugin.ModLogger.LogInfo("Restored vanilla ChainLightning chain target chance after WarfareFireAndIce patch.");
+            _loggedVanillaRestore = true;
+            WarfareTweaksPlugin.ModLogger.LogInfo("Restored vanilla ChainLightning damage and chain target chance after WarfareFireAndIce patch.");
         }
+    }
+
+    internal static void TrackSetup(Aoe aoe, Character owner, ItemDrop.ItemData item)
+    {
+        if (aoe == null)
+        {
+            return;
+        }
+
+        if (!TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+        {
+            return;
+        }
+
+        ChainLightningActivation activation = ActiveActivation ?? new ChainLightningActivation(++_nextActivationId, Time.time, Time.frameCount);
+        state.Activation = activation;
+        activation.SetupCount++;
+    }
+
+    internal static ChainUpdateScope BeginChainUpdate(Aoe aoe)
+    {
+        ChainLightningActivation? previous = ActiveActivation;
+        if (aoe != null)
+        {
+            if (TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+            {
+                ActiveActivation = EnsureActivation(state);
+            }
+        }
+
+        return new ChainUpdateScope(previous);
+    }
+
+    internal static void EndChainUpdate(ChainUpdateScope scope)
+    {
+        ActiveActivation = scope.PreviousActivation;
     }
 
     internal static bool ShouldAllowChainLightningHit(Aoe aoe, Collider collider)
     {
-        if (aoe == null || collider == null || !IsChainLightningAoe(aoe))
+        if (aoe == null || collider == null)
         {
             return true;
         }
 
-        GameObject hitObject = Projectile.FindHitObject(collider);
-        Character? target = hitObject != null ? hitObject.GetComponent<Character>() : null;
+        if (!TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+        {
+            return true;
+        }
+
+        Character? target = TryGetHitCharacter(collider);
         if (target == null)
         {
             return true;
         }
 
-        Character? owner = AoeOwnerField?.GetValue(aoe) as Character;
-        int ownerId = owner != null ? owner.GetInstanceID() : 0;
         int targetId = target.GetInstanceID();
-        int sourceId = ResolveSourceId(aoe);
-        ChainLightningHitKey key = new(ownerId, targetId, sourceId);
-        float now = Time.time;
-
-        CleanupExpired(now);
-        if (RecentHits.TryGetValue(key, out float expiresAt) && expiresAt > now)
+        ChainLightningActivation activation = EnsureActivation(state);
+        if (activation.HitTargetIds.Contains(targetId))
         {
             return false;
         }
 
-        RecentHits[key] = now + DuplicateHitWindow;
+        activation.HitTargetIds.Add(targetId);
         return true;
     }
 
-    private static bool IsChainLightningAoe(Aoe aoe)
+    internal static void FilterChainLightningCandidate(Aoe aoe, Collider collider, ref bool result)
     {
+        if (!result || aoe == null || collider == null)
+        {
+            return;
+        }
+
+        if (!TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+        {
+            return;
+        }
+
+        ChainLightningActivation? activation = state.Activation ?? ActiveActivation;
+        if (activation == null)
+        {
+            return;
+        }
+
+        Character? target = TryGetHitCharacter(collider);
+        if (target == null)
+        {
+            return;
+        }
+
+        if (!activation.HitTargetIds.Contains(target.GetInstanceID()))
+        {
+            return;
+        }
+
+        result = false;
+    }
+
+    private static ChainLightningActivation EnsureActivation(ChainLightningAoeState state)
+    {
+        return state.Activation ??= ActiveActivation ?? new ChainLightningActivation(++_nextActivationId, Time.time, Time.frameCount);
+    }
+
+    private static Character? TryGetHitCharacter(Collider collider)
+    {
+        GameObject hitObject = Projectile.FindHitObject(collider);
+        return hitObject != null ? hitObject.GetComponent<Character>() : null;
+    }
+
+    private static bool TryGetChainLightningState(Aoe aoe, out ChainLightningAoeState state)
+    {
+        state = ChainLightningAoeState.NotChainLightning;
+        if (!CouldBeChainLightningAoe(aoe))
+        {
+            return false;
+        }
+
+        state = AoeStates.GetValue(aoe, CreateAoeState);
+        return state.IsChainLightning;
+    }
+
+    private static ChainLightningAoeState CreateAoeState(Aoe aoe)
+    {
+        return TryResolveChainLightningSourceName(aoe, out string sourceName)
+            ? new ChainLightningAoeState(true, NormalizeSourceName(sourceName).GetStableHashCode())
+            : ChainLightningAoeState.NotChainLightning;
+    }
+
+    private static bool TryResolveChainLightningSourceName(Aoe aoe, out string sourceName)
+    {
+        string aoeName = aoe.name;
         Transform transform = aoe.transform;
-        return ContainsChainLightningName(aoe.name) ||
-               ContainsChainLightningName(transform.root != null ? transform.root.name : "") ||
-               ContainsChainLightningName(transform.parent != null ? transform.parent.name : "");
+        bool aoeNameMatches = ContainsChainLightningName(aoeName);
+        bool rootNameMatches = transform.root != null && ContainsChainLightningName(transform.root.name);
+        bool parentNameMatches = transform.parent != null && ContainsChainLightningName(transform.parent.name);
+        if (!aoeNameMatches && !rootNameMatches && !parentNameMatches)
+        {
+            sourceName = "";
+            return false;
+        }
+
+        sourceName = !aoeNameMatches && transform.root != null ? transform.root.name : aoeName;
+        return true;
+    }
+
+    private static bool CouldBeChainLightningAoe(Aoe aoe)
+    {
+        if (aoe == null)
+        {
+            return false;
+        }
+
+        if (ContainsChainLightningName(aoe.name))
+        {
+            return true;
+        }
+
+        if (aoe.m_chainStartChance <= 0f &&
+            aoe.m_chainChancePerTarget <= 0f &&
+            aoe.m_chainObj == null)
+        {
+            return false;
+        }
+
+        if (ContainsChainLightningName(aoe.m_chainObj != null ? aoe.m_chainObj.name : ""))
+        {
+            return true;
+        }
+
+        Transform transform = aoe.transform;
+        return transform.root != null && ContainsChainLightningName(transform.root.name) ||
+               transform.parent != null && ContainsChainLightningName(transform.parent.name);
     }
 
     private static bool ContainsChainLightningName(string value)
@@ -76,94 +216,50 @@ internal static class ChainLightningDedupSystem
                value.IndexOf("ChainLightning", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private static int ResolveSourceId(Aoe aoe)
+    private static string NormalizeSourceName(string name)
     {
-        string name = aoe.name;
-        Transform transform = aoe.transform;
-        if (!ContainsChainLightningName(name) && transform.root != null)
-        {
-            name = transform.root.name;
-        }
-
-        return name.Replace("(Clone)", "", StringComparison.OrdinalIgnoreCase).Trim().GetStableHashCode();
+        return name.Replace("(Clone)", "", StringComparison.OrdinalIgnoreCase).Trim();
     }
 
-    private static void CleanupExpired(float now)
+    internal readonly struct ChainUpdateScope
     {
-        if (RecentHits.Count < 128)
+        internal ChainUpdateScope(ChainLightningActivation? previousActivation)
         {
-            return;
+            PreviousActivation = previousActivation;
         }
 
-        List<ChainLightningHitKey>? expired = null;
-        foreach ((ChainLightningHitKey key, float expiresAt) in RecentHits)
-        {
-            if (expiresAt > now)
-            {
-                continue;
-            }
-
-            expired ??= new List<ChainLightningHitKey>();
-            expired.Add(key);
-        }
-
-        if (expired == null)
-        {
-            return;
-        }
-
-        foreach (ChainLightningHitKey key in expired)
-        {
-            RecentHits.Remove(key);
-        }
+        internal ChainLightningActivation? PreviousActivation { get; }
     }
 
-    private readonly struct ChainLightningHitKey : IEquatable<ChainLightningHitKey>
+    internal sealed class ChainLightningActivation
     {
-        private readonly int _ownerId;
-        private readonly int _targetId;
-        private readonly int _sourceId;
-
-        public ChainLightningHitKey(int ownerId, int targetId, int sourceId)
+        public ChainLightningActivation(int id, float createdAt, int createdFrame)
         {
-            _ownerId = ownerId;
-            _targetId = targetId;
-            _sourceId = sourceId;
+            Id = id;
+            CreatedAt = createdAt;
+            CreatedFrame = createdFrame;
         }
 
-        public bool Equals(ChainLightningHitKey other)
-        {
-            return _ownerId == other._ownerId &&
-                   _targetId == other._targetId &&
-                   _sourceId == other._sourceId;
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is ChainLightningHitKey other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                int hash = _ownerId;
-                hash = (hash * 397) ^ _targetId;
-                hash = (hash * 397) ^ _sourceId;
-                return hash;
-            }
-        }
+        public int Id { get; }
+        public float CreatedAt { get; }
+        public int CreatedFrame { get; }
+        public int SetupCount { get; set; }
+        public HashSet<int> HitTargetIds { get; } = new();
     }
-}
 
-[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
-[HarmonyAfter(WarfareTweaksCompat.WarfareFireAndIceGuid)]
-internal static class ZNetSceneAwakeChainLightningRestorePatch
-{
-    [HarmonyPriority(Priority.Last)]
-    private static void Postfix(ZNetScene __instance)
+    private sealed class ChainLightningAoeState
     {
-        ChainLightningDedupSystem.RestoreVanillaChainChance(__instance);
+        internal static readonly ChainLightningAoeState NotChainLightning = new(false, 0);
+
+        public ChainLightningAoeState(bool isChainLightning, int sourceId)
+        {
+            IsChainLightning = isChainLightning;
+            SourceId = sourceId;
+        }
+
+        public bool IsChainLightning { get; }
+        public int SourceId { get; }
+        public ChainLightningActivation? Activation { get; set; }
     }
 }
 
@@ -180,5 +276,37 @@ internal static class AoeOnHitChainLightningDedupPatch
 
         __result = false;
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(Aoe), "ShouldHit", new[] { typeof(Collider) })]
+internal static class AoeShouldHitChainLightningCandidatePatch
+{
+    private static void Postfix(Aoe __instance, Collider collider, ref bool __result)
+    {
+        ChainLightningDedupSystem.FilterChainLightningCandidate(__instance, collider, ref __result);
+    }
+}
+
+[HarmonyPatch(typeof(Aoe), nameof(Aoe.Setup))]
+internal static class AoeSetupChainLightningActivationPatch
+{
+    private static void Postfix(Aoe __instance, Character owner, ItemDrop.ItemData item)
+    {
+        ChainLightningDedupSystem.TrackSetup(__instance, owner, item);
+    }
+}
+
+[HarmonyPatch(typeof(Aoe), nameof(Aoe.CustomFixedUpdate))]
+internal static class AoeCustomFixedUpdateChainLightningActivationPatch
+{
+    private static void Prefix(Aoe __instance, out ChainLightningDedupSystem.ChainUpdateScope __state)
+    {
+        __state = ChainLightningDedupSystem.BeginChainUpdate(__instance);
+    }
+
+    private static void Postfix(ChainLightningDedupSystem.ChainUpdateScope __state)
+    {
+        ChainLightningDedupSystem.EndChainUpdate(__state);
     }
 }

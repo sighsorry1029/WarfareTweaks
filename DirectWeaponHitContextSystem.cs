@@ -45,6 +45,14 @@ internal static class DirectWeaponHitContextSystem
     internal static Scope BeginCharacterDamage()
     {
         _characterDamageDepth++;
+        if (_directHitDepth == 0 &&
+            WarfareTweaksBridge.TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName))
+        {
+            _weaponPrefabName = weaponPrefabName;
+            _directHitDepth++;
+            return new Scope(ScopeKind.CharacterDamageWithExternalDirectHit);
+        }
+
         return new Scope(ScopeKind.CharacterDamage);
     }
 
@@ -74,6 +82,22 @@ internal static class DirectWeaponHitContextSystem
             case ScopeKind.CharacterDamage when _characterDamageDepth > 0:
                 _characterDamageDepth--;
                 break;
+            case ScopeKind.CharacterDamageWithExternalDirectHit:
+                if (_characterDamageDepth > 0)
+                {
+                    _characterDamageDepth--;
+                }
+
+                if (_directHitDepth > 0)
+                {
+                    _directHitDepth--;
+                    if (_directHitDepth == 0)
+                    {
+                        _weaponPrefabName = "";
+                    }
+                }
+
+                break;
         }
     }
 
@@ -91,7 +115,8 @@ internal static class DirectWeaponHitContextSystem
     {
         None,
         DirectHit,
-        CharacterDamage
+        CharacterDamage,
+        CharacterDamageWithExternalDirectHit
     }
 }
 

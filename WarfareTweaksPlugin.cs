@@ -28,7 +28,6 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
     internal static string ConfigDirectoryPath => Paths.ConfigPath;
     internal static string WarfareYamlFilePath => Path.Combine(ConfigDirectoryPath, WarfareYamlFileName);
-    internal static ConfigEntry<Toggle> WarfareThrowableDebugLogging = null!;
     internal static IReadOnlyDictionary<string, EffectBehaviorConfig> CurrentEffects => _currentEffects;
 
     private static Dictionary<string, EffectBehaviorConfig> _currentEffects = new(StringComparer.OrdinalIgnoreCase);
@@ -49,12 +48,6 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
     public void Awake()
     {
-        WarfareThrowableDebugLogging = Config.Bind(
-            "2 - Debug",
-            "Enable Warfare Throwable Debug Logging",
-            Toggle.Off,
-            "If on, client-side Warfare throwing axe compatibility debug logs are printed to LogOutput.log.");
-
         ConfigSync.AddLockingConfigEntry(Config.Bind(
             "1 - General",
             "Lock Configuration",
@@ -110,7 +103,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         }
 
         WarfareThrowableCompat.ApplyToZNetScene(scene);
-        ChainLightningDedupSystem.RestoreVanillaChainChance(scene);
+        ChainLightningDedupSystem.RestoreVanillaChainLightningBehavior(scene);
     }
 
     private void SetupWatcher()

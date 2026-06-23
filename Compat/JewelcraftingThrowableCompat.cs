@@ -86,8 +86,11 @@ internal static class JewelcraftingThrowableCompat
             }
 
             RemovePrefabBlacklistEntry(item);
-            WarfareThrowableCompat.LogDebug(
-                $"Jewelcrafting pre-normalized Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
+            if (WarfareThrowableCompat.DebugLoggingEnabled)
+            {
+                WarfareThrowableCompat.LogDebug(
+                    $"Jewelcrafting pre-normalized Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
+            }
         }
     }
 
@@ -105,8 +108,11 @@ internal static class JewelcraftingThrowableCompat
 
         RemovePrefabBlacklistEntry(item);
         __result = true;
-        WarfareThrowableCompat.LogDebug(
-            $"Jewelcrafting socketability allowed for Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
+        if (WarfareThrowableCompat.DebugLoggingEnabled)
+        {
+            WarfareThrowableCompat.LogDebug(
+                $"Jewelcrafting socketability allowed for Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
+        }
     }
 
     private static bool IsUserSocketBlacklisted(ItemDrop.ItemData item)

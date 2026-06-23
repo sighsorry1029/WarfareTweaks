@@ -4,6 +4,16 @@ using UnityEngine;
 
 namespace WarfareTweaks;
 
+[HarmonyPatch(typeof(FejdStartup), nameof(FejdStartup.Awake))]
+internal static class FejdStartupAwakeWarfareItemManagerSyncCompatPatch
+{
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix()
+    {
+        WarfareItemManagerSyncCompat.RegisterMissingRecipeConfigs();
+    }
+}
+
 [HarmonyPatch(typeof(ObjectDB), nameof(ObjectDB.Awake))]
 internal static class ObjectDbAwakeWarfareTweaksPatch
 {

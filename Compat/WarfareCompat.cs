@@ -16,6 +16,7 @@ internal static class WarfareCompat
     internal const string WarfareGuid = "Therzie.Warfare";
     private const string WarfareStatusEffectsNamespace = "Warfare_StatusEffects.StatusEffects";
     private const string WarfareFireAndIceStatusEffectsNamespace = "WarfareFireAndIce_StatusEffects.StatusEffects";
+    private const string WarfareUtilsTypeName = WarfareStatusEffectsNamespace + ".WarfareUtils";
 
     private static readonly Dictionary<string, HashSet<string>> SuppressedEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, HashSet<string>> ManagedEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
@@ -28,7 +29,15 @@ internal static class WarfareCompat
     private static readonly Dictionary<string, WarfareAttackStatusEffectOverrideState> AppliedAttackStatusEffectOverrides = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConditionalWeakTable<StatusEffect, WarfareBleedTuningState> BleedTuningsByStatus = new();
     private static readonly ConditionalWeakTable<StatusEffect, WarfareHasteTuningState> HasteTuningsByStatus = new();
+    private static readonly ConditionalWeakTable<ItemDrop.ItemData.SharedData, ItemPrefabNameCacheEntry> ItemPrefabNamesBySharedData = new();
     private static readonly List<WarfareDotSourceDamageContext> ActiveDotSourceDamageContexts = new();
+    private static readonly Dictionary<ObjectDB, ObjectDbItemNameCache> ObjectDbItemNameCaches = new();
+    private static readonly Dictionary<string, ConfiguredWarfareEffectLookup> ConfiguredEffectsByPrefabAndEffectId = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, Type> LoadedTypesByName = new(StringComparer.Ordinal);
+    private static readonly Dictionary<Type, WarfareTargetAccessors> TargetAccessorsByEffectType = new();
+    private static readonly Dictionary<Type, WarfareTargetSetAccessors> TargetSetAccessorsByType = new();
+    private static readonly int WarfareHasteStackingHash = "Warfare_Haste_Stacking".GetStableHashCode();
+    private static readonly int WarfareFireAndIceHasteStackingHash = "WarfareFireAndIce_Haste_Stacking".GetStableHashCode();
     private const float WarfareSourceDamageDotDuration = 10f;
     private const float WarfareSourceDamageDotTickInterval = 1f;
     private static float? _pendingHasteMoveSpeedMultiplier;
@@ -49,6 +58,7 @@ internal static class WarfareCompat
         "WarpikeDvergr_TW"
     };
 
+    // Built-in effect defaults drive config suppression and restoration decisions.
     private static readonly WarfareBuiltInEffectRegistration[] BuiltInRegistrations =
     {
         RegisterWarfareAndFireAndIce(
@@ -140,6 +150,8 @@ internal static class WarfareCompat
             "smashnBash")
     };
 
+    private static readonly Dictionary<string, WarfareBuiltInEffectRegistration> RegistrationsByEffectId = BuildRegistrationLookup();
+
     private static WarfareBuiltInEffectRegistration RegisterWarfareAndFireAndIce(
         string id,
         string patchTypeName,
@@ -157,6 +169,24 @@ internal static class WarfareCompat
             aliases);
     }
 
+    private static Dictionary<string, WarfareBuiltInEffectRegistration> BuildRegistrationLookup()
+    {
+        Dictionary<string, WarfareBuiltInEffectRegistration> lookup = new(StringComparer.OrdinalIgnoreCase);
+        foreach (WarfareBuiltInEffectRegistration registration in BuiltInRegistrations)
+        {
+            foreach (string effectId in registration.EffectIds)
+            {
+                string key = effectId?.Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(key) && !lookup.ContainsKey(key))
+                {
+                    lookup.Add(key, registration);
+                }
+            }
+        }
+
+        return lookup;
+    }
+
     internal static void TryInstallHooks()
     {
         if (_hooksInstalled)
@@ -165,7 +195,8 @@ internal static class WarfareCompat
         }
 
         Harmony harmony = new("sighsorry.WarfareTweaks");
-        int patchedCount = TryInstallBuiltInDirectHitGateHooks(harmony);
+        int patchedCount = TryInstallAttackWeaponContextHook(harmony);
+        patchedCount += TryInstallBuiltInDirectHitGateHooks(harmony);
         patchedCount += TryInstallAddToItemGateHooks(harmony);
         patchedCount += TryInstallBleedingTuningHooks(harmony);
         patchedCount += TryInstallFixedDamageTuningHooks(harmony);
@@ -184,6 +215,7 @@ internal static class WarfareCompat
         SuppressedEffectsByPrefabName.Clear();
         ManagedEffectsByPrefabName.Clear();
         ManagedChainLightningPrefabs.Clear();
+        RebuildConfiguredEffectLookup(effectConfigs);
 
         foreach (WarfareBuiltInEffectRegistration registration in BuiltInRegistrations)
         {
@@ -222,6 +254,7 @@ internal static class WarfareCompat
         }
     }
 
+    // YAML/ObjectDB application mutates Warfare target lists and native item status effects.
     internal static void ApplyConfiguredEffects(ObjectDB objectDb, IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
     {
         List<(string EffectId, EffectBehaviorConfig Config)> warfareEffects = effectConfigs
@@ -436,12 +469,19 @@ internal static class WarfareCompat
         if (item?.m_dropPrefab != null)
         {
             prefabName = NormalizePrefabName(item.m_dropPrefab.name);
+            CacheItemPrefabName(item.m_shared, prefabName);
             return !string.IsNullOrWhiteSpace(prefabName);
         }
 
         if (ObjectDB.instance?.m_items == null || item?.m_shared == null)
         {
             return false;
+        }
+
+        if (ItemPrefabNamesBySharedData.TryGetValue(item.m_shared, out ItemPrefabNameCacheEntry cachedEntry))
+        {
+            prefabName = cachedEntry.PrefabName;
+            return !string.IsNullOrWhiteSpace(prefabName);
         }
 
         foreach (GameObject prefab in ObjectDB.instance.m_items)
@@ -455,6 +495,7 @@ internal static class WarfareCompat
             if (prefabItem?.m_itemData?.m_shared == item.m_shared)
             {
                 prefabName = NormalizePrefabName(prefab.name);
+                CacheItemPrefabName(item.m_shared, prefabName);
                 return !string.IsNullOrWhiteSpace(prefabName);
             }
         }
@@ -474,10 +515,22 @@ internal static class WarfareCompat
             }
 
             prefabName = NormalizePrefabName(prefab.name);
+            CacheItemPrefabName(item.m_shared, prefabName);
             return !string.IsNullOrWhiteSpace(prefabName);
         }
 
         return false;
+    }
+
+    private static void CacheItemPrefabName(ItemDrop.ItemData.SharedData? sharedData, string prefabName)
+    {
+        if (sharedData == null || string.IsNullOrWhiteSpace(prefabName))
+        {
+            return;
+        }
+
+        ItemPrefabNamesBySharedData.Remove(sharedData);
+        ItemPrefabNamesBySharedData.Add(sharedData, new ItemPrefabNameCacheEntry(prefabName));
     }
 
     private static string NormalizePrefabName(string prefabName)
@@ -570,6 +623,65 @@ internal static class WarfareCompat
         }
 
         return false;
+    }
+
+    private static void RebuildConfiguredEffectLookup(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
+    {
+        ConfiguredEffectsByPrefabAndEffectId.Clear();
+        foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
+        {
+            string configuredEffectId = effectId?.Trim() ?? "";
+            if (effectConfig == null ||
+                !TryFindRegistration(configuredEffectId, out WarfareBuiltInEffectRegistration? registration) ||
+                registration == null)
+            {
+                continue;
+            }
+
+            foreach (string prefabName in GetConfiguredPrefabNames(effectConfig))
+            {
+                ConfiguredEffectsByPrefabAndEffectId[ConfiguredEffectLookupKey(prefabName, registration.Id)] =
+                    new ConfiguredWarfareEffectLookup(
+                        registration,
+                        effectConfig,
+                        TryGetPrefabOverride(effectConfig, prefabName));
+            }
+        }
+    }
+
+    private static bool TryGetConfiguredEffectForCurrentWeapon(
+        string canonicalEffectId,
+        out string prefabName,
+        out ConfiguredWarfareEffectLookup? lookup)
+    {
+        lookup = null;
+        if (!TryGetCurrentAttackWeaponPrefabName(out prefabName))
+        {
+            return false;
+        }
+
+        return TryGetConfiguredEffect(prefabName, canonicalEffectId, out lookup);
+    }
+
+    private static bool TryGetConfiguredEffect(
+        string prefabName,
+        string canonicalEffectId,
+        out ConfiguredWarfareEffectLookup? lookup)
+    {
+        lookup = null;
+        if (string.IsNullOrWhiteSpace(prefabName) || string.IsNullOrWhiteSpace(canonicalEffectId))
+        {
+            return false;
+        }
+
+        return ConfiguredEffectsByPrefabAndEffectId.TryGetValue(
+            ConfiguredEffectLookupKey(prefabName, canonicalEffectId),
+            out lookup);
+    }
+
+    private static string ConfiguredEffectLookupKey(string prefabName, string canonicalEffectId)
+    {
+        return $"{prefabName.Trim()}\n{canonicalEffectId.Trim()}";
     }
 
     private static IEnumerable<string> GetConfiguredPrefabNames(EffectBehaviorConfig effectConfig)
@@ -703,6 +815,36 @@ internal static class WarfareCompat
         return __originalMethod == null ||
                !PatchedPrefixMethods.TryGetValue(__originalMethod, out string? effectId) ||
                !WeaponEffectManager.ShouldSuppressWarfareBuiltIn(effectId);
+    }
+
+    // Harmony hook installers are grouped before the resolver methods they patch into.
+    private static int TryInstallAttackWeaponContextHook(Harmony harmony)
+    {
+        Type? targetType = FindLoadedType(WarfareUtilsTypeName);
+        MethodInfo? targetMethod = targetType != null
+            ? AccessTools.DeclaredMethod(targetType, "TryGetAttackWeapon")
+            : null;
+        if (targetMethod == null)
+        {
+            return 0;
+        }
+
+        harmony.Patch(
+            targetMethod,
+            prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareTryGetAttackWeaponPrefix)));
+        return 1;
+    }
+
+    private static bool WarfareTryGetAttackWeaponPrefix(ref string prefab, ref bool __result)
+    {
+        if (!DirectWeaponHitContextSystem.TryGetCurrentProjectileWeaponPrefabName(out string weaponPrefabName))
+        {
+            return true;
+        }
+
+        prefab = weaponPrefabName;
+        __result = true;
+        return false;
     }
 
     private static int TryInstallBuiltInDirectHitGateHooks(Harmony harmony)
@@ -1326,6 +1468,7 @@ internal static class WarfareCompat
         return false;
     }
 
+    // Runtime resolvers are invoked from transpiled Warfare status effect code.
     private static float ResolveWarfareBleedTickInterval(object statusObject, float vanillaValue)
     {
         if (statusObject is not StatusEffect status ||
@@ -1414,13 +1557,13 @@ internal static class WarfareCompat
 
     private static bool TryGetActiveWarfareHasteStatus(SEMan seMan, out StatusEffect? status)
     {
-        status = seMan.GetStatusEffect("Warfare_Haste_Stacking".GetStableHashCode());
+        status = seMan.GetStatusEffect(WarfareHasteStackingHash);
         if (status != null)
         {
             return true;
         }
 
-        status = seMan.GetStatusEffect("WarfareFireAndIce_Haste_Stacking".GetStableHashCode());
+        status = seMan.GetStatusEffect(WarfareFireAndIceHasteStackingHash);
         return status != null;
     }
 
@@ -1506,96 +1649,69 @@ internal static class WarfareCompat
     private static bool TryResolveWarfareBleedTuning(string canonicalEffectId, out WarfareBleedTuning? tuning)
     {
         tuning = null;
-        if (!TryGetCurrentAttackWeaponPrefabName(out string prefabName))
+        if (!TryGetConfiguredEffectForCurrentWeapon(
+                canonicalEffectId,
+                out string prefabName,
+                out ConfiguredWarfareEffectLookup? lookup) ||
+            lookup == null)
         {
             return false;
         }
 
-        IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs = WarfareTweaksPlugin.CurrentEffects;
-        foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
+        EffectBehaviorConfig effectConfig = lookup.EffectConfig;
+        EffectBehaviorOverrideConfig? prefabOverride = lookup.PrefabOverride;
+        tuning = new WarfareBleedTuning
         {
-            if (effectConfig == null ||
-                !WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName) ||
-                !TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration) ||
-                !string.Equals(registration!.Id, canonicalEffectId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            EffectBehaviorOverrideConfig? prefabOverride = TryGetPrefabOverride(effectConfig, prefabName);
-            tuning = new WarfareBleedTuning
-            {
-                PrefabName = prefabName,
-                StacksRequired = prefabOverride?.StacksRequired ?? effectConfig.StacksRequired,
-                StackWindow = prefabOverride?.StackWindow ?? (effectConfig.StackWindow > 0f ? effectConfig.StackWindow : null),
-                Duration = prefabOverride?.Duration ?? effectConfig.Duration,
-                TickInterval = prefabOverride?.TickInterval ?? effectConfig.TickInterval,
-                DamageFactor = prefabOverride?.DamageFactor ?? effectConfig.DamageFactor,
-                NativeValue = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName)
-            };
-            return tuning.HasAnyValue;
-        }
-
-        return false;
+            PrefabName = prefabName,
+            StacksRequired = prefabOverride?.StacksRequired ?? effectConfig.StacksRequired,
+            StackWindow = prefabOverride?.StackWindow ?? (effectConfig.StackWindow > 0f ? effectConfig.StackWindow : null),
+            Duration = prefabOverride?.Duration ?? effectConfig.Duration,
+            TickInterval = prefabOverride?.TickInterval ?? effectConfig.TickInterval,
+            DamageFactor = prefabOverride?.DamageFactor ?? effectConfig.DamageFactor,
+            NativeValue = ResolveConfiguredWarfareValue(lookup.Registration, effectConfig, prefabOverride, prefabName)
+        };
+        return tuning.HasAnyValue;
     }
 
     private static bool TryResolveConfiguredWarfareValueForCurrentWeapon(string canonicalEffectId, out int value)
     {
         value = 0;
-        if (!TryGetCurrentAttackWeaponPrefabName(out string prefabName))
+        if (!TryGetConfiguredEffectForCurrentWeapon(
+                canonicalEffectId,
+                out string prefabName,
+                out ConfiguredWarfareEffectLookup? lookup) ||
+            lookup == null)
         {
             return false;
         }
 
-        IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs = WarfareTweaksPlugin.CurrentEffects;
-        foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
+        int? configuredValue = ResolveConfiguredWarfareValue(
+            lookup.Registration,
+            lookup.EffectConfig,
+            lookup.PrefabOverride,
+            prefabName);
+        if (!configuredValue.HasValue)
         {
-            if (effectConfig == null ||
-                !WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName) ||
-                !TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration) ||
-                !string.Equals(registration!.Id, canonicalEffectId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            EffectBehaviorOverrideConfig? prefabOverride = TryGetPrefabOverride(effectConfig, prefabName);
-            int? configuredValue = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            if (!configuredValue.HasValue)
-            {
-                return false;
-            }
-
-            value = configuredValue.Value;
-            return true;
+            return false;
         }
 
-        return false;
+        value = configuredValue.Value;
+        return true;
     }
 
     private static bool TryResolveConfiguredAdrenalineRestorePercentForCurrentWeapon(out float percent)
     {
         percent = 0f;
-        if (!TryGetCurrentAttackWeaponPrefabName(out string prefabName))
+        if (!TryGetConfiguredEffectForCurrentWeapon(
+                "adrenaline",
+                out _,
+                out ConfiguredWarfareEffectLookup? lookup) ||
+            lookup == null)
         {
             return false;
         }
 
-        IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs = WarfareTweaksPlugin.CurrentEffects;
-        foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
-        {
-            if (effectConfig == null ||
-                !WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName) ||
-                !TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration) ||
-                !string.Equals(registration!.Id, "adrenaline", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            EffectBehaviorOverrideConfig? prefabOverride = TryGetPrefabOverride(effectConfig, prefabName);
-            return TryResolveAdrenalineRestorePercent(effectConfig, prefabOverride, out percent);
-        }
-
-        return false;
+        return TryResolveAdrenalineRestorePercent(lookup.EffectConfig, lookup.PrefabOverride, out percent);
     }
 
     private static bool TryResolveAdrenalineRestorePercent(
@@ -1631,37 +1747,25 @@ internal static class WarfareCompat
 
     private static float ResolveConfiguredHasteMoveSpeedMultiplier(float defaultValue)
     {
-        if (!TryGetCurrentAttackWeaponPrefabName(out string prefabName))
+        if (!TryGetConfiguredEffectForCurrentWeapon(
+                "haste",
+                out _,
+                out ConfiguredWarfareEffectLookup? lookup) ||
+            lookup == null)
         {
             return defaultValue;
         }
 
-        IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs = WarfareTweaksPlugin.CurrentEffects;
-        foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
+        EffectBehaviorConfig effectConfig = lookup.EffectConfig;
+        EffectBehaviorOverrideConfig? prefabOverride = lookup.PrefabOverride;
+        if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
         {
-            if (effectConfig == null ||
-                !WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName) ||
-                !TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration) ||
-                !string.Equals(registration!.Id, "haste", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            EffectBehaviorOverrideConfig? prefabOverride = TryGetPrefabOverride(effectConfig, prefabName);
-            if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
-            {
-                return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
-            }
-
-            if (!Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f))
-            {
-                return Mathf.Max(0f, effectConfig.MoveSpeedMultiplier);
-            }
-
-            return defaultValue;
+            return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
         }
 
-        return defaultValue;
+        return !Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f)
+            ? Mathf.Max(0f, effectConfig.MoveSpeedMultiplier)
+            : defaultValue;
     }
 
     private static bool TryGetCurrentAttackWeaponPrefabName(out string prefabName)
@@ -1713,9 +1817,6 @@ internal static class WarfareCompat
             hit.GetAttacker() != Player.m_localPlayer ||
             !DirectWeaponHitContextSystem.IsDirectWeaponHitActive ||
             WeaponEffectManager.IsApplyingGeneratedEffectDamage ||
-            LaunchSlamSystem.IsApplyingLandingDamage ||
-            KnockbackChainSystem.IsApplyingChainDamage ||
-            MeleeProjectileHitCascadeSystem.IsApplyingImpactBurstDamage ||
             !TryGetCurrentAttackWeaponPrefabName(out string prefabName))
         {
             return default;
@@ -1857,23 +1958,34 @@ internal static class WarfareCompat
     private static bool TryFindRegistration(string effectId, out WarfareBuiltInEffectRegistration? registration)
     {
         registration = null;
-        if (string.IsNullOrWhiteSpace(effectId))
+        string key = effectId?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(key))
         {
             return false;
         }
 
-        registration = BuiltInRegistrations.FirstOrDefault(candidate =>
-            candidate.EffectIds.Any(candidateId => string.Equals(candidateId, effectId.Trim(), StringComparison.OrdinalIgnoreCase)));
-        return registration != null;
+        return RegistrationsByEffectId.TryGetValue(key, out registration);
     }
 
     private static Type? FindLoadedType(string fullTypeName)
     {
+        string typeName = fullTypeName?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(typeName))
+        {
+            return null;
+        }
+
+        if (LoadedTypesByName.TryGetValue(typeName, out Type? cachedType))
+        {
+            return cachedType;
+        }
+
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            Type? type = assembly.GetType(fullTypeName, throwOnError: false);
+            Type? type = assembly.GetType(typeName, throwOnError: false);
             if (type != null)
             {
+                LoadedTypesByName[typeName] = type;
                 return type;
             }
         }
@@ -1982,8 +2094,39 @@ internal static class WarfareCompat
 
     private static bool ContainsObjectDbItem(ObjectDB objectDb, string prefabName)
     {
-        return objectDb?.m_items != null &&
-               objectDb.m_items.Any(item => item != null && string.Equals(item.name, prefabName, StringComparison.OrdinalIgnoreCase));
+        if (objectDb?.m_items == null || string.IsNullOrWhiteSpace(prefabName))
+        {
+            return false;
+        }
+
+        ObjectDbItemNameCache cache = GetObjectDbItemNameCache(objectDb);
+        return cache.ItemNames.Contains(prefabName);
+    }
+
+    private static ObjectDbItemNameCache GetObjectDbItemNameCache(ObjectDB objectDb)
+    {
+        int itemCount = objectDb.m_items?.Count ?? 0;
+        if (ObjectDbItemNameCaches.TryGetValue(objectDb, out ObjectDbItemNameCache? cache) &&
+            cache.ItemCount == itemCount)
+        {
+            return cache;
+        }
+
+        HashSet<string> itemNames = new(StringComparer.OrdinalIgnoreCase);
+        if (objectDb.m_items != null)
+        {
+            foreach (GameObject item in objectDb.m_items)
+            {
+                if (item != null)
+                {
+                    itemNames.Add(item.name);
+                }
+            }
+        }
+
+        cache = new ObjectDbItemNameCache(itemCount, itemNames);
+        ObjectDbItemNameCaches[objectDb] = cache;
+        return cache;
     }
 
     private static bool TryApplyChainLightningConfig(
@@ -2605,6 +2748,7 @@ internal static class WarfareCompat
                value.StartsWith("WarfareFireAndIce_", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Target assignment helpers isolate reflection against Warfare's Targets/AddToItem APIs.
     private static bool TryApplyTargetAssignment(
         Type effectType,
         string prefabName,
@@ -2730,11 +2874,33 @@ internal static class WarfareCompat
         return true;
     }
 
+    private static WarfareTargetAccessors GetTargetAccessors(Type effectType)
+    {
+        if (!TargetAccessorsByEffectType.TryGetValue(effectType, out WarfareTargetAccessors? accessors))
+        {
+            accessors = new WarfareTargetAccessors(effectType);
+            TargetAccessorsByEffectType[effectType] = accessors;
+        }
+
+        return accessors;
+    }
+
+    private static WarfareTargetSetAccessors GetTargetSetAccessors(Type targetType)
+    {
+        if (!TargetSetAccessorsByType.TryGetValue(targetType, out WarfareTargetSetAccessors? accessors))
+        {
+            accessors = new WarfareTargetSetAccessors(targetType);
+            TargetSetAccessorsByType[targetType] = accessors;
+        }
+
+        return accessors;
+    }
+
     private static bool TryGetTargets(Type effectType, out object? targets, out string reason)
     {
         targets = null;
         reason = "";
-        FieldInfo? targetsField = effectType.GetField("Targets", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        FieldInfo? targetsField = GetTargetAccessors(effectType).TargetsField;
         if (targetsField == null)
         {
             reason = $"Warfare type '{effectType.FullName}' has no Targets field.";
@@ -2755,10 +2921,11 @@ internal static class WarfareCompat
     {
         contains = false;
         reason = "";
-        MethodInfo? containsMethod = targets.GetType().GetMethod("Contains", new[] { typeof(string) });
+        Type targetsType = targets.GetType();
+        MethodInfo? containsMethod = GetTargetSetAccessors(targetsType).ContainsMethod;
         if (containsMethod == null)
         {
-            reason = $"Warfare Targets type '{targets.GetType().FullName}' has no Contains(string) method.";
+            reason = $"Warfare Targets type '{targetsType.FullName}' has no Contains(string) method.";
             return false;
         }
 
@@ -2769,10 +2936,11 @@ internal static class WarfareCompat
     private static bool TryInvokeSetTargetAdd(object targets, string prefabName, out string reason)
     {
         reason = "";
-        MethodInfo? addMethod = targets.GetType().GetMethod("Add", new[] { typeof(string) });
+        Type targetsType = targets.GetType();
+        MethodInfo? addMethod = GetTargetSetAccessors(targetsType).AddMethod;
         if (addMethod == null)
         {
-            reason = $"Warfare Targets type '{targets.GetType().FullName}' has no Add(string) method.";
+            reason = $"Warfare Targets type '{targetsType.FullName}' has no Add(string) method.";
             return false;
         }
 
@@ -2783,10 +2951,11 @@ internal static class WarfareCompat
     private static bool TryInvokeSetTargetRemove(object targets, string prefabName, out string reason)
     {
         reason = "";
-        MethodInfo? removeMethod = targets.GetType().GetMethod("Remove", new[] { typeof(string) });
+        Type targetsType = targets.GetType();
+        MethodInfo? removeMethod = GetTargetSetAccessors(targetsType).RemoveMethod;
         if (removeMethod == null)
         {
-            reason = $"Warfare Targets type '{targets.GetType().FullName}' has no Remove(string) method.";
+            reason = $"Warfare Targets type '{targetsType.FullName}' has no Remove(string) method.";
             return false;
         }
 
@@ -2803,10 +2972,7 @@ internal static class WarfareCompat
     {
         assignment = null;
         reason = "";
-        MethodInfo[] addToItemMethods = effectType
-            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-            .Where(method => method.Name == "AddToItem")
-            .ToArray();
+        MethodInfo[] addToItemMethods = GetTargetAccessors(effectType).AddToItemMethods;
         if (addToItemMethods.Length == 0)
         {
             reason = $"Warfare type '{effectType.FullName}' has no AddToItem method.";
@@ -2907,6 +3073,57 @@ internal static class WarfareCompat
         }
 
         return value;
+    }
+
+    private sealed class ConfiguredWarfareEffectLookup
+    {
+        public ConfiguredWarfareEffectLookup(
+            WarfareBuiltInEffectRegistration registration,
+            EffectBehaviorConfig effectConfig,
+            EffectBehaviorOverrideConfig? prefabOverride)
+        {
+            Registration = registration;
+            EffectConfig = effectConfig;
+            PrefabOverride = prefabOverride;
+        }
+
+        public WarfareBuiltInEffectRegistration Registration { get; }
+
+        public EffectBehaviorConfig EffectConfig { get; }
+
+        public EffectBehaviorOverrideConfig? PrefabOverride { get; }
+    }
+
+    private sealed class WarfareTargetAccessors
+    {
+        public WarfareTargetAccessors(Type effectType)
+        {
+            TargetsField = effectType.GetField("Targets", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            AddToItemMethods = effectType
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Where(method => method.Name == "AddToItem")
+                .ToArray();
+        }
+
+        public FieldInfo? TargetsField { get; }
+
+        public MethodInfo[] AddToItemMethods { get; }
+    }
+
+    private sealed class WarfareTargetSetAccessors
+    {
+        public WarfareTargetSetAccessors(Type targetType)
+        {
+            ContainsMethod = targetType.GetMethod("Contains", new[] { typeof(string) });
+            AddMethod = targetType.GetMethod("Add", new[] { typeof(string) });
+            RemoveMethod = targetType.GetMethod("Remove", new[] { typeof(string) });
+        }
+
+        public MethodInfo? ContainsMethod { get; }
+
+        public MethodInfo? AddMethod { get; }
+
+        public MethodInfo? RemoveMethod { get; }
     }
 
     private sealed class WarfareBuiltInEffectRegistration
@@ -3200,6 +3417,29 @@ internal static class WarfareCompat
         }
 
         public float MoveSpeedMultiplier { get; }
+    }
+
+    private sealed class ItemPrefabNameCacheEntry
+    {
+        public ItemPrefabNameCacheEntry(string prefabName)
+        {
+            PrefabName = prefabName;
+        }
+
+        public string PrefabName { get; }
+    }
+
+    private sealed class ObjectDbItemNameCache
+    {
+        public ObjectDbItemNameCache(int itemCount, HashSet<string> itemNames)
+        {
+            ItemCount = itemCount;
+            ItemNames = itemNames;
+        }
+
+        public int ItemCount { get; }
+
+        public HashSet<string> ItemNames { get; }
     }
 
     private sealed class WarfareDotSourceDamageContext

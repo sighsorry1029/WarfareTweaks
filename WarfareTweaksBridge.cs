@@ -6,24 +6,47 @@ namespace WarfareTweaks;
 internal static class WarfareTweaksBridge
 {
     private const string SecondaryAttacksBridgeTypeName = "SecondaryAttacks.WarfareTweaksBridge, SecondaryAttacks";
-    private static Type? _secondaryBridgeType;
-    private static MethodInfo? _shouldSuppressProjectile;
-    private static PropertyInfo? _isGeneratedDamageActive;
+    private const string CaptainValheimBridgeTypeName = "CaptainValheim.WarfareTweaksBridge, CaptainValheim";
+    private static ShouldSuppressProjectileDelegate? _shouldSuppressProjectile;
+    private static IsGeneratedDamageActiveDelegate? _isGeneratedDamageActive;
+    private static TryGetWeaponPrefabNameDelegate? _tryGetCaptainValheimShieldHitWeaponPrefabName;
     private static bool _resolved;
+    private delegate bool ShouldSuppressProjectileDelegate(Projectile projectile);
+    private delegate bool IsGeneratedDamageActiveDelegate();
+    private delegate bool TryGetWeaponPrefabNameDelegate(out string weaponPrefabName);
 
     internal static bool IsExternalGeneratedDamageActive
     {
         get
         {
             EnsureResolved();
-            return _isGeneratedDamageActive?.GetValue(null) is true;
+            return _isGeneratedDamageActive?.Invoke() is true;
         }
     }
 
     internal static bool ShouldSuppressProjectile(Projectile projectile)
     {
         EnsureResolved();
-        return _shouldSuppressProjectile?.Invoke(null, new object[] { projectile }) is true;
+        return _shouldSuppressProjectile?.Invoke(projectile) is true;
+    }
+
+    internal static bool TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName)
+    {
+        weaponPrefabName = "";
+        EnsureResolved();
+        if (_tryGetCaptainValheimShieldHitWeaponPrefabName == null)
+        {
+            return false;
+        }
+
+        if (!_tryGetCaptainValheimShieldHitWeaponPrefabName(out string contextWeaponPrefabName) ||
+            string.IsNullOrWhiteSpace(contextWeaponPrefabName))
+        {
+            return false;
+        }
+
+        weaponPrefabName = contextWeaponPrefabName;
+        return true;
     }
 
     private static void EnsureResolved()
@@ -34,17 +57,45 @@ internal static class WarfareTweaksBridge
         }
 
         _resolved = true;
-        _secondaryBridgeType = Type.GetType(SecondaryAttacksBridgeTypeName, throwOnError: false);
-        if (_secondaryBridgeType == null)
+        Type? secondaryBridgeType = Type.GetType(SecondaryAttacksBridgeTypeName, throwOnError: false);
+        Type? captainValheimBridgeType = Type.GetType(CaptainValheimBridgeTypeName, throwOnError: false);
+
+        if (secondaryBridgeType != null)
         {
-            return;
+            _shouldSuppressProjectile = CreateStaticDelegate<ShouldSuppressProjectileDelegate>(
+                secondaryBridgeType.GetMethod(
+                    "ShouldSuppressProjectile",
+                    BindingFlags.Public | BindingFlags.Static));
+            _isGeneratedDamageActive = CreateStaticDelegate<IsGeneratedDamageActiveDelegate>(
+                secondaryBridgeType.GetProperty(
+                    "IsGeneratedDamageActive",
+                    BindingFlags.Public | BindingFlags.Static)?.GetGetMethod());
         }
 
-        _shouldSuppressProjectile = _secondaryBridgeType.GetMethod(
-            "ShouldSuppressProjectile",
-            BindingFlags.Public | BindingFlags.Static);
-        _isGeneratedDamageActive = _secondaryBridgeType.GetProperty(
-            "IsGeneratedDamageActive",
-            BindingFlags.Public | BindingFlags.Static);
+        if (captainValheimBridgeType != null)
+        {
+            _tryGetCaptainValheimShieldHitWeaponPrefabName = CreateStaticDelegate<TryGetWeaponPrefabNameDelegate>(
+                captainValheimBridgeType.GetMethod(
+                    "TryGetShieldHitWeaponPrefabName",
+                    BindingFlags.Public | BindingFlags.Static));
+        }
+    }
+
+    private static TDelegate? CreateStaticDelegate<TDelegate>(MethodInfo? method)
+        where TDelegate : class
+    {
+        if (method == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Delegate.CreateDelegate(typeof(TDelegate), method, throwOnBindFailure: false) as TDelegate;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
