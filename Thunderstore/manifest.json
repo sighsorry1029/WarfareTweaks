@@ -1,9 +1,10 @@
 {
   "name": "WarfareTweaks",
   "version_number": "1.0.0",
-  "website_url": "https://discord.gg/pdHgy6Bsng",
-  "description": "Tunes Therzie Warfare and WarfareFireAndIce weapon effects from server-synced YAML, assigning native effects to any prefab while guarding generated hits, shield contexts, and Chain Lightning duplicate-damage edge cases for cleaner multiplayer tuning.",
+  "website_url": "https://discord.gg/jkcJCq2sK5",
+  "description": "Tunes Therzie Warfare and WarfareFireAndIce weapon effects through server-synced YAML, assigning native effects to any prefab. Adds durability-based throwing axes, health-scaled damage fixes, and safer Chain Lightning.",
   "dependencies": [
-    "denikson-BepInExPack_Valheim-5.4.2202"
+    "denikson-BepInExPack_Valheim-5.4.2333",
+    "Therzie-Warfare-1.8.9"
   ]
 }

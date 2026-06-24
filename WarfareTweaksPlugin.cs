@@ -56,6 +56,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         _syncedWarfareYaml = new CustomSyncedValue<string>(ConfigSync, "warfare_tweaks_warfare_yaml", "");
         _syncedWarfareYaml.ValueChanged += OnSyncedWarfareYamlChanged;
 
+        WarfareTweaksLocalization.Load();
         WarfareTweaksConfigLoader.EnsureLocalFileExists();
         ReloadLocalConfigFromDisk(applyToWorld: false);
 
@@ -78,14 +79,14 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         _harmony.UnpatchSelf();
     }
 
-    internal static void ApplyToObjectDb(ObjectDB objectDb)
+    internal static void ApplyToObjectDb(ObjectDB objectDb, bool logMissingPrefabWarnings = false)
     {
         if (objectDb == null)
         {
             return;
         }
 
-        WarfareCompat.ApplyConfiguredEffects(objectDb, _currentEffects);
+        WarfareCompat.ApplyConfiguredEffects(objectDb, _currentEffects, logMissingPrefabWarnings);
         WarfareThrowableCompat.ApplyToObjectDb(objectDb);
         WarfareSkillCompat.ApplyToObjectDb(objectDb);
     }
@@ -99,7 +100,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
         if (ObjectDB.instance != null)
         {
-            WarfareCompat.ApplyConfiguredEffects(ObjectDB.instance, _currentEffects);
+            WarfareCompat.ApplyConfiguredEffects(ObjectDB.instance, _currentEffects, logMissingPrefabWarnings: true);
         }
 
         WarfareThrowableCompat.ApplyToZNetScene(scene);
@@ -174,7 +175,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
         if (ObjectDB.instance != null)
         {
-            ApplyToObjectDb(ObjectDB.instance);
+            ApplyToObjectDb(ObjectDB.instance, logMissingPrefabWarnings: ZNetScene.instance != null);
         }
 
         if (ZNetScene.instance != null)

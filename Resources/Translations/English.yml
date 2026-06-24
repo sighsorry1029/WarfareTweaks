@@ -1,0 +1,43 @@
+wt_effect_adrenaline: Adrenaline
+wt_effect_bash: Bash
+wt_effect_bleeding: Bleeding
+wt_effect_bleeding_secondary: Bleeding Secondary
+wt_effect_burning_secondary: Burning Secondary
+wt_effect_decapitator: Decapitator
+wt_effect_executioner: Executioner
+wt_effect_hack_and_slash: Hack and Slash
+wt_effect_haste: Haste
+wt_effect_impale: Impale
+wt_effect_piercer: Piercer
+wt_effect_lightning_burst: Lightning Burst
+wt_effect_pinning: Pinning
+wt_effect_piercing_greatbow: Piercing Greatbow
+wt_effect_smasher: Smasher
+wt_effect_smash_and_bash: Smash and Bash
+wt_effect_bludgeoner: Bludgeoner
+wt_effect_vampirism: Vampirism
+wt_effect_fallback: Warfare Effect
+wt_damage_blunt: blunt
+wt_damage_fire: fire
+wt_damage_frost: frost
+wt_damage_lightning: lightning
+wt_damage_pierce: pierce
+wt_damage_slash: slash
+wt_tooltip_adrenaline_value: Restores {0}% of max stamina on the 5th hit against the same target.
+wt_tooltip_adrenaline: Restores stamina on the 5th hit against the same target.
+wt_tooltip_haste: Increases movement speed on the 6th hit against the same target. Multiplier: {0}x.
+wt_tooltip_vampirism_value: Restores {0}% of max health on the 5th hit against the same target.
+wt_tooltip_vampirism: Restores health on repeated hits against the same target.
+wt_tooltip_dot_value: Applies {0} damage over time based on the triggering hit. Damage factor: {1}x.
+wt_tooltip_dot: Applies {0} damage over time based on the triggering hit.
+wt_tooltip_bash_value: Can stagger enemies on non-secondary hits. Chance: {0}%.
+wt_tooltip_bash: Can stagger enemies on non-secondary hits.
+wt_tooltip_executioner_value: Deals bonus damage to targets at or below 25% health. Bonus: {0}%.
+wt_tooltip_executioner: Deals bonus damage to low-health targets.
+wt_tooltip_resistance_weakness: Makes {0} damage count as weak on the {1}th hit against the same target within {2}s.
+wt_tooltip_fixed_extra_damage_value: Deals {0} extra {1} damage after repeated hits against the same target.
+wt_tooltip_fixed_extra_damage: Deals extra {0} damage after repeated hits against the same target.
+wt_tooltip_pinning_value: Slows targets hit for {0}s.
+wt_tooltip_pinning: Slows targets hit for a brief moment.
+wt_tooltip_fallback_value: "Warfare effect value: {0}."
+wt_tooltip_fallback: Warfare effect assigned by WarfareTweaks.

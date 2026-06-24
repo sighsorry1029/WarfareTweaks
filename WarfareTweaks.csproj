@@ -521,6 +521,8 @@
     <Error Text="icon.png not found in Thunderstore directory. Please note that Thunderstore requires this image to be 256x256 in dimension" Condition="!Exists('$(ProjectDir)\Thunderstore\icon.png')" />
     <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)\Thunderstore\CHANGELOG.md')" />
     <Error Text="README.md not found in temporary Thunderstore package directory." Condition="!Exists('$(PackageDir)\README.md')" />
+    <Error Text="English.yml not found in Resources\Translations directory." Condition="!Exists('$(ProjectDir)\Resources\Translations\English.yml')" />
+    <Error Text="Korean.yml not found in Resources\Translations directory." Condition="!Exists('$(ProjectDir)\Resources\Translations\Korean.yml')" />
     <ItemGroup>
       <PackageFiles Include="$(TargetDir)$(AssemblyName).dll" Condition="Exists('$(TargetDir)$(AssemblyName).dll')" />
       <PackageFiles Include="$(ProjectDir)\Thunderstore\CHANGELOG.md" Condition="Exists('$(ProjectDir)\Thunderstore\CHANGELOG.md')" />
@@ -528,6 +530,7 @@
       <PackageFiles Include="$(ProjectDir)\Thunderstore\icon.png" Condition="Exists('$(ProjectDir)\Thunderstore\icon.png')" />
     </ItemGroup>
     <Copy SourceFiles="@(PackageFiles)" DestinationFolder="$(PackageDir)" />
+    <Copy SourceFiles="$(ProjectDir)\Resources\Translations\English.yml" DestinationFiles="$(PackageDir)\WarfareTweaks.English.yml" OverwriteReadOnlyFiles="true" />
     <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="$(ProjectDir)Thunderstore\$(PackageName).zip" Overwrite="true" />
     <RemoveDir Directories="$(PackageDir)" />
   </Target>
@@ -545,8 +548,10 @@
   <ItemGroup>
     <Compile Include="ChainLightningDedupSystem.cs" />
     <Compile Include="DirectWeaponHitContextSystem.cs" />
+    <Compile Include="LocalizationManager.cs" />
     <Compile Include="ProjectileAccess.cs" />
     <Compile Include="WarfareEffectConfigHelpers.cs" />
+    <Compile Include="WarfareTweaksLocalization.cs" />
     <Compile Include="WarfareTweaksBridge.cs" />
     <Compile Include="WarfareTweaksCompat.cs" />
     <Compile Include="WarfareTweaksConfigLoader.cs" />
@@ -572,6 +577,8 @@
     </Content>
     <Content Include="LICENSE.txt" />
     <Content Include="README.md" />
+    <Content Include="Resources\Translations\English.yml" />
+    <Content Include="Resources\Translations\Korean.yml" />
     <Content Include="Thunderstore\CHANGELOG.md" />
     <Content Include="Thunderstore\icon.png" />
     <Content Include="Thunderstore\manifest.json" />
@@ -580,6 +587,12 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\Defaults\WarfareTweaks.yml">
       <LogicalName>WarfareTweaks.Resources.Defaults.WarfareTweaks.yml</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\Translations\English.yml">
+      <LogicalName>WarfareTweaks.translations.English.yml</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\Translations\Korean.yml">
+      <LogicalName>WarfareTweaks.translations.Korean.yml</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
