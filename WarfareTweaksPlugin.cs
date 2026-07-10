@@ -17,7 +17,7 @@ namespace WarfareTweaks;
 public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 {
     internal const string ModName = "WarfareTweaks";
-    internal const string ModVersion = "1.0.0";
+    internal const string ModVersion = "1.0.1";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string WarfareYamlFileName = "WarfareTweaks.yml";
@@ -28,8 +28,6 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
     internal static string ConfigDirectoryPath => Paths.ConfigPath;
     internal static string WarfareYamlFilePath => Path.Combine(ConfigDirectoryPath, WarfareYamlFileName);
-    internal static IReadOnlyDictionary<string, EffectBehaviorConfig> CurrentEffects => _currentEffects;
-
     private static Dictionary<string, EffectBehaviorConfig> _currentEffects = new(StringComparer.OrdinalIgnoreCase);
     private static CustomSyncedValue<string>? _syncedWarfareYaml;
     private static bool _suppressSyncedYamlChanged;
@@ -56,9 +54,11 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         _syncedWarfareYaml = new CustomSyncedValue<string>(ConfigSync, "warfare_tweaks_warfare_yaml", "");
         _syncedWarfareYaml.ValueChanged += OnSyncedWarfareYamlChanged;
 
-        WarfareTweaksLocalization.Load();
-        WarfareTweaksConfigLoader.EnsureLocalFileExists();
-        ReloadLocalConfigFromDisk(applyToWorld: false);
+        WarfareTweaksLocalization.Load(this);
+        if (!ReloadLocalConfigFromDisk(applyToWorld: false))
+        {
+            ApplyEmbeddedDefaultConfig();
+        }
 
         Assembly assembly = Assembly.GetExecutingAssembly();
         _harmony.PatchAll(assembly);
@@ -126,18 +126,44 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
             return;
         }
 
+        bool reloaded;
         lock (_reloadLock)
         {
-            ReloadLocalConfigFromDisk(applyToWorld: true);
+            reloaded = ReloadLocalConfigFromDisk(applyToWorld: true);
         }
 
-        _lastConfigReloadTime = now;
+        if (reloaded)
+        {
+            _lastConfigReloadTime = DateTime.Now;
+        }
     }
 
-    private static void ReloadLocalConfigFromDisk(bool applyToWorld)
+    private static bool ReloadLocalConfigFromDisk(bool applyToWorld)
     {
-        WarfareTweaksConfigLoader.EnsureLocalFileExists();
-        string yamlText = File.ReadAllText(WarfareYamlFilePath);
+        string yamlText;
+        try
+        {
+            WarfareTweaksConfigLoader.EnsureLocalFileExists();
+            yamlText = File.ReadAllText(WarfareYamlFilePath);
+        }
+        catch (Exception exception)
+        {
+            ModLogger.LogError(
+                $"Failed to read {WarfareYamlFileName}; the last valid configuration remains active: {exception.Message}");
+            return false;
+        }
+
+        if (!TryApplyYamlText(yamlText, applyToWorld))
+        {
+            return false;
+        }
+
+        PublishSyncedYaml(yamlText);
+        return true;
+    }
+
+    private static void PublishSyncedYaml(string yamlText)
+    {
         if (_syncedWarfareYaml != null)
         {
             _suppressSyncedYamlChanged = true;
@@ -150,8 +176,6 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
                 _suppressSyncedYamlChanged = false;
             }
         }
-
-        ApplyYamlText(yamlText, applyToWorld);
     }
 
     private static void OnSyncedWarfareYamlChanged()
@@ -161,16 +185,21 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
             return;
         }
 
-        ApplyYamlText(_syncedWarfareYaml.Value, applyToWorld: true);
+        TryApplyYamlText(_syncedWarfareYaml.Value, applyToWorld: true);
     }
 
-    private static void ApplyYamlText(string yamlText, bool applyToWorld)
+    private static bool TryApplyYamlText(string yamlText, bool applyToWorld)
     {
-        _currentEffects = WarfareTweaksConfigLoader.Parse(yamlText);
+        if (!WarfareTweaksConfigLoader.TryParse(yamlText, out Dictionary<string, EffectBehaviorConfig> parsedEffects))
+        {
+            return false;
+        }
+
+        _currentEffects = parsedEffects;
         WarfareCompat.RebuildBuiltInEffects(_currentEffects);
         if (!applyToWorld)
         {
-            return;
+            return true;
         }
 
         if (ObjectDB.instance != null)
@@ -184,5 +213,19 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         }
 
         ModLogger.LogInfo("WarfareTweaks YAML reload complete.");
+        return true;
+    }
+
+    private static void ApplyEmbeddedDefaultConfig()
+    {
+        string defaultYaml = WarfareTweaksDefaultYamlResources.Load(WarfareYamlFileName);
+        if (!TryApplyYamlText(defaultYaml, applyToWorld: false))
+        {
+            throw new InvalidDataException($"Embedded default {WarfareYamlFileName} is invalid.");
+        }
+
+        PublishSyncedYaml(defaultYaml);
+        ModLogger.LogWarning(
+            $"Using embedded default {WarfareYamlFileName} because the local file could not be loaded.");
     }
 }

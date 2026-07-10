@@ -54,3 +54,6 @@ Warfare or WarfareFireAndIce must be installed for their native effect classes a
 - CaptainValheim can expose shield-hit context to WarfareTweaks through reflection.
 - Jewelcrafting throwable compatibility is installed only when the matching plugin is present.
 - Warfare and WarfareFireAndIce are soft dependencies, so the mod can load safely while waiting for the relevant plugin to be installed.
+
+## Github
+https://github.com/sighsorry1029/WarfareTweaks

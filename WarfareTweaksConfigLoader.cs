@@ -11,6 +11,41 @@ namespace WarfareTweaks;
 
 internal static class WarfareTweaksConfigLoader
 {
+    private static readonly HashSet<string> IgnoredLegacyEffectFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "trigger",
+        "damageType",
+        "modifier",
+        "damage",
+        "heal",
+        "healthThresholdPercent",
+        "damageMultiplier",
+        "consumeOnModify"
+    };
+
+    private static readonly HashSet<string> IgnoredLegacyPrefabOverrideFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "type",
+        "prefab",
+        "trigger",
+        "lightningDamage",
+        "radius",
+        "ttl",
+        "hitInterval",
+        "damageType",
+        "modifier",
+        "damage",
+        "heal",
+        "healthThresholdPercent",
+        "damageMultiplier",
+        "consumeOnModify"
+    };
+
+    private static readonly HashSet<string> IgnoredLegacyScalarValueFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "mode"
+    };
+
     private static readonly Dictionary<string, string> PrefabScalarFields = new(StringComparer.OrdinalIgnoreCase)
     {
         ["adrenaline"] = "staminaRestore.value",
@@ -49,18 +84,16 @@ internal static class WarfareTweaksConfigLoader
         }
     }
 
-    internal static Dictionary<string, EffectBehaviorConfig> LoadLocalFile()
+    internal static bool TryParse(
+        string yamlText,
+        out Dictionary<string, EffectBehaviorConfig> parsed)
     {
-        EnsureLocalFileExists();
-        return Parse(File.ReadAllText(WarfareTweaksPlugin.WarfareYamlFilePath));
-    }
-
-    internal static Dictionary<string, EffectBehaviorConfig> Parse(string yamlText)
-    {
-        Dictionary<string, EffectBehaviorConfig> parsed = new(StringComparer.OrdinalIgnoreCase);
+        parsed = new Dictionary<string, EffectBehaviorConfig>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(yamlText))
         {
-            return parsed;
+            WarfareTweaksPlugin.ModLogger.LogWarning(
+                $"Ignoring empty {WarfareTweaksPlugin.WarfareYamlFileName}; the last valid configuration remains active. Use '{{}}' to explicitly clear all effect assignments.");
+            return false;
         }
 
         try
@@ -70,7 +103,7 @@ internal static class WarfareTweaksConfigLoader
             if (stream.Documents.Count == 0 ||
                 stream.Documents[0].RootNode is not YamlMappingNode root)
             {
-                return parsed;
+                throw new InvalidDataException("The YAML root must be a mapping.");
             }
 
             foreach (KeyValuePair<YamlNode, YamlNode> entry in root.Children)
@@ -87,18 +120,21 @@ internal static class WarfareTweaksConfigLoader
                 }
                 catch (Exception entryException)
                 {
-                    WarfareTweaksPlugin.ModLogger.LogWarning(
-                        $"Skipping {WarfareTweaksPlugin.WarfareYamlFileName} block '{rootKey}': {entryException.Message}");
+                    throw new InvalidDataException(
+                        $"Block '{rootKey}' is invalid: {entryException.Message}",
+                        entryException);
                 }
             }
+
+            return true;
         }
         catch (Exception exception)
         {
             WarfareTweaksPlugin.ModLogger.LogError(
-                $"Failed to parse {WarfareTweaksPlugin.WarfareYamlFileName}: {exception.Message}");
+                $"Failed to parse {WarfareTweaksPlugin.WarfareYamlFileName}; the last valid configuration remains active: {exception.Message}");
+            parsed.Clear();
+            return false;
         }
-
-        return parsed;
     }
 
     private static EffectBehaviorConfig DeserializeEffectBehaviorConfig(string rootKey, YamlNode node)
@@ -109,7 +145,74 @@ internal static class WarfareTweaksConfigLoader
         }
 
         NormalizePrefabScalarOverrides(rootKey, mapping);
+        RemoveIgnoredLegacyFields(rootKey, mapping);
         return DeserializeYamlNode<EffectBehaviorConfig>(mapping) ?? new EffectBehaviorConfig();
+    }
+
+    private static void RemoveIgnoredLegacyFields(string rootKey, YamlMappingNode mapping)
+    {
+        RemoveIgnoredMappingFields(
+            mapping,
+            IgnoredLegacyEffectFields,
+            $"block '{rootKey}'");
+        RemoveIgnoredScalarValueMode(mapping, "staminaRestore", $"block '{rootKey}'");
+
+        if (!TryGetMappingChild(mapping, "prefabs", out YamlMappingNode? prefabs) || prefabs == null)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<YamlNode, YamlNode> entry in prefabs.Children)
+        {
+            if (entry.Value is not YamlMappingNode prefabOverride)
+            {
+                continue;
+            }
+
+            string prefabName = (entry.Key as YamlScalarNode)?.Value?.Trim() ?? "";
+            string location = $"prefab '{prefabName}' in block '{rootKey}'";
+            RemoveIgnoredMappingFields(
+                prefabOverride,
+                IgnoredLegacyPrefabOverrideFields,
+                location);
+            RemoveIgnoredScalarValueMode(prefabOverride, "staminaRestore", location);
+        }
+    }
+
+    private static void RemoveIgnoredScalarValueMode(
+        YamlMappingNode owner,
+        string fieldName,
+        string location)
+    {
+        if (TryGetMappingChild(owner, fieldName, out YamlMappingNode? scalarValue) && scalarValue != null)
+        {
+            RemoveIgnoredMappingFields(
+                scalarValue,
+                IgnoredLegacyScalarValueFields,
+                $"field '{fieldName}' in {location}");
+        }
+    }
+
+    private static void RemoveIgnoredMappingFields(
+        YamlMappingNode mapping,
+        HashSet<string> ignoredLegacyFields,
+        string location)
+    {
+        foreach (KeyValuePair<YamlNode, YamlNode> entry in mapping.Children.ToList())
+        {
+            string fieldName = (entry.Key as YamlScalarNode)?.Value?.Trim() ?? "";
+            if (!ignoredLegacyFields.Contains(fieldName))
+            {
+                continue;
+            }
+
+            mapping.Children.Remove(entry.Key);
+            if (WarfareTweaksWarningLog.TryMarkReported($"ignored_yaml_field_{fieldName}"))
+            {
+                WarfareTweaksPlugin.ModLogger.LogWarning(
+                    $"Ignoring unsupported {WarfareTweaksPlugin.WarfareYamlFileName} field '{fieldName}' in {location}; it has no WarfareTweaks behavior.");
+            }
+        }
     }
 
     private static void NormalizePrefabScalarOverrides(string rootKey, YamlMappingNode mapping)
@@ -138,17 +241,15 @@ internal static class WarfareTweaksConfigLoader
 
             if (!float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
             {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
-                    $"Skipping scalar prefab override in {WarfareTweaksPlugin.WarfareYamlFileName} block '{rootKey}': expected a numeric {scalarField}, got '{value}'.");
-                continue;
+                throw new InvalidDataException(
+                    $"Prefab '{entry.Key}' must use a numeric {scalarField}, got '{value}'.");
             }
 
             if (string.Equals(scalarField, "value", StringComparison.OrdinalIgnoreCase) &&
                 !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
             {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
-                    $"Skipping scalar prefab override in {WarfareTweaksPlugin.WarfareYamlFileName} block '{rootKey}': expected an integer value, got '{value}'.");
-                continue;
+                throw new InvalidDataException(
+                    $"Prefab '{entry.Key}' must use an integer value, got '{value}'.");
             }
 
             prefabs.Children[entry.Key] = BuildScalarOverrideNode(scalarField!, value);

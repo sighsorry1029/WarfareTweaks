@@ -16,6 +16,7 @@ internal static class WarfareItemManagerSyncCompat
     private const string ItemManagerTypeName = "ItemManager.Item";
     private const string CraftingTableTypeName = "ItemManager.CraftingTable";
     private const string ToggleTypeName = "ItemManager.Toggle";
+    private const string TargetDisplayName = "Warfare";
 
     private static readonly HashSet<string> RecipeConfigKeys = new(StringComparer.Ordinal)
     {
@@ -38,54 +39,48 @@ internal static class WarfareItemManagerSyncCompat
         "Upgrading Costs"
     };
 
-    private static readonly ItemManagerSyncTarget[] Targets =
+    private static readonly RecipeConfigSeed[] KnownRecipeEntries =
     {
-        new(
-            WarfareTweaksCompat.WarfareGuid,
-            "Warfare",
-            new[]
-            {
-                RecipeEntry("Crystal Battleaxe", "Crafting Station", "Forge"),
-                RecipeEntry("Crystal Battleaxe", "Custom Crafting Station", ""),
-                RecipeEntry("Crystal Battleaxe", "Crafting Station Level", "4"),
-                RecipeEntry("Crystal Battleaxe", "Maximum Crafting Station Level", "7"),
-                RecipeEntry("Crystal Battleaxe", "Require only one resource", "Off"),
-                RecipeEntry("Crystal Battleaxe", "Quality Multiplier", "1"),
-                RecipeEntry("Crystal Battleaxe", "Crafting Costs", "ElderBark:40,Silver:30,Crystal:10"),
-                RecipeEntry("Crystal Battleaxe", "Upgrading Costs", "ElderBark:5,Silver:15,Crystal:3"),
+        RecipeEntry("Crystal Battleaxe", "Crafting Station", "Forge"),
+        RecipeEntry("Crystal Battleaxe", "Custom Crafting Station", ""),
+        RecipeEntry("Crystal Battleaxe", "Crafting Station Level", "4"),
+        RecipeEntry("Crystal Battleaxe", "Maximum Crafting Station Level", "7"),
+        RecipeEntry("Crystal Battleaxe", "Require only one resource", "Off"),
+        RecipeEntry("Crystal Battleaxe", "Quality Multiplier", "1"),
+        RecipeEntry("Crystal Battleaxe", "Crafting Costs", "ElderBark:40,Silver:30,Crystal:10"),
+        RecipeEntry("Crystal Battleaxe", "Upgrading Costs", "ElderBark:5,Silver:15,Crystal:3"),
 
-                RecipeEntry("Stagbreaker", "Crafting Station", "Workbench"),
-                RecipeEntry("Stagbreaker", "Custom Crafting Station", ""),
-                RecipeEntry("Stagbreaker", "Crafting Station Level", "2"),
-                RecipeEntry("Stagbreaker", "Maximum Crafting Station Level", "5"),
-                RecipeEntry("Stagbreaker", "Require only one resource", "Off"),
-                RecipeEntry("Stagbreaker", "Quality Multiplier", "1"),
-                RecipeEntry("Stagbreaker", "Crafting Costs", "RoundLog:20,TrophyDeer:5,LeatherScraps:2"),
-                RecipeEntry("Stagbreaker", "Upgrading Costs", "RoundLog:5,TrophyDeer:2,LeatherScraps:1,BoneFragments:10"),
+        RecipeEntry("Stagbreaker", "Crafting Station", "Workbench"),
+        RecipeEntry("Stagbreaker", "Custom Crafting Station", ""),
+        RecipeEntry("Stagbreaker", "Crafting Station Level", "2"),
+        RecipeEntry("Stagbreaker", "Maximum Crafting Station Level", "5"),
+        RecipeEntry("Stagbreaker", "Require only one resource", "Off"),
+        RecipeEntry("Stagbreaker", "Quality Multiplier", "1"),
+        RecipeEntry("Stagbreaker", "Crafting Costs", "RoundLog:20,TrophyDeer:5,LeatherScraps:2"),
+        RecipeEntry("Stagbreaker", "Upgrading Costs", "RoundLog:5,TrophyDeer:2,LeatherScraps:1,BoneFragments:10"),
 
-                RecipeEntry("Iron Sledge", "Crafting Station", "Forge"),
-                RecipeEntry("Iron Sledge", "Custom Crafting Station", ""),
-                RecipeEntry("Iron Sledge", "Crafting Station Level", "2"),
-                RecipeEntry("Iron Sledge", "Maximum Crafting Station Level", "5"),
-                RecipeEntry("Iron Sledge", "Require only one resource", "Off"),
-                RecipeEntry("Iron Sledge", "Quality Multiplier", "1"),
-                RecipeEntry("Iron Sledge", "Crafting Costs", "ElderBark:10,Iron:30,YmirRemains:4,TrophyDraugrElite:1"),
-                RecipeEntry("Iron Sledge", "Upgrading Costs", "ElderBark:2,Iron:15,YmirRemains:2"),
+        RecipeEntry("Iron Sledge", "Crafting Station", "Forge"),
+        RecipeEntry("Iron Sledge", "Custom Crafting Station", ""),
+        RecipeEntry("Iron Sledge", "Crafting Station Level", "2"),
+        RecipeEntry("Iron Sledge", "Maximum Crafting Station Level", "5"),
+        RecipeEntry("Iron Sledge", "Require only one resource", "Off"),
+        RecipeEntry("Iron Sledge", "Quality Multiplier", "1"),
+        RecipeEntry("Iron Sledge", "Crafting Costs", "ElderBark:10,Iron:30,YmirRemains:4,TrophyDraugrElite:1"),
+        RecipeEntry("Iron Sledge", "Upgrading Costs", "ElderBark:2,Iron:15,YmirRemains:2"),
 
-                RecipeEntry("Demolisher", "Crafting Station", "BlackForge"),
-                RecipeEntry("Demolisher", "Custom Crafting Station", ""),
-                RecipeEntry("Demolisher", "Crafting Station Level", "1"),
-                RecipeEntry("Demolisher", "Maximum Crafting Station Level", "4"),
-                RecipeEntry("Demolisher", "Require only one resource", "Off"),
-                RecipeEntry("Demolisher", "Quality Multiplier", "1"),
-                RecipeEntry("Demolisher", "Crafting Costs", "YggdrasilWood:10,Iron:20,Eitr:10"),
-                RecipeEntry("Demolisher", "Upgrading Costs", "YggdrasilWood:2,Iron:15,Eitr:2")
-            })
+        RecipeEntry("Demolisher", "Crafting Station", "BlackForge"),
+        RecipeEntry("Demolisher", "Custom Crafting Station", ""),
+        RecipeEntry("Demolisher", "Crafting Station Level", "1"),
+        RecipeEntry("Demolisher", "Maximum Crafting Station Level", "4"),
+        RecipeEntry("Demolisher", "Require only one resource", "Off"),
+        RecipeEntry("Demolisher", "Quality Multiplier", "1"),
+        RecipeEntry("Demolisher", "Crafting Costs", "YggdrasilWood:10,Iron:20,Eitr:10"),
+        RecipeEntry("Demolisher", "Upgrading Costs", "YggdrasilWood:2,Iron:15,Eitr:2")
     };
 
-    private static readonly MethodInfo ConfigFileBindMethod = typeof(ConfigFile)
+    private static readonly MethodInfo? ConfigFileBindMethod = typeof(ConfigFile)
         .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-        .Single(static method =>
+        .FirstOrDefault(static method =>
         {
             if (!method.IsGenericMethodDefinition || method.Name != nameof(ConfigFile.Bind))
             {
@@ -99,26 +94,23 @@ internal static class WarfareItemManagerSyncCompat
                    parameters[3].ParameterType == typeof(ConfigDescription);
         });
 
-    private static readonly HashSet<string> MissingTargetWarnings = new(StringComparer.OrdinalIgnoreCase);
+    private static bool _reportedTargetWarning;
 
     internal static void RegisterMissingRecipeConfigs()
     {
-        foreach (ItemManagerSyncTarget target in Targets)
+        try
         {
-            try
-            {
-                RegisterMissingRecipeConfigs(target);
-            }
-            catch (Exception exception)
-            {
-                LogTargetWarningOnce(target, $"Failed to run {target.DisplayName} ItemManager sync compat: {exception.Message}");
-            }
+            RegisterMissingRecipeConfigsForWarfare();
+        }
+        catch (Exception exception)
+        {
+            LogTargetWarningOnce($"Failed to run {TargetDisplayName} ItemManager sync compat: {exception.Message}");
         }
     }
 
-    private static void RegisterMissingRecipeConfigs(ItemManagerSyncTarget target)
+    private static void RegisterMissingRecipeConfigsForWarfare()
     {
-        if (!TryGetPlugin(target.PluginGuid, out BaseUnityPlugin? plugin) || plugin == null)
+        if (!TryGetPlugin(WarfareTweaksCompat.WarfareGuid, out BaseUnityPlugin? plugin) || plugin == null)
         {
             return;
         }
@@ -129,18 +121,18 @@ internal static class WarfareItemManagerSyncCompat
         Type? toggleType = assembly.GetType(ToggleTypeName, throwOnError: false);
         if (itemManagerType == null || craftingTableType == null || toggleType == null)
         {
-            LogTargetWarningOnce(target, $"Skipping {target.DisplayName} ItemManager sync compat: embedded ItemManager types were not found.");
+            LogTargetWarningOnce($"Skipping {TargetDisplayName} ItemManager sync compat: embedded ItemManager types were not found.");
             return;
         }
 
         object? itemManagerConfigSync = GetItemManagerConfigSync(itemManagerType);
         if (itemManagerConfigSync == null)
         {
-            LogTargetWarningOnce(target, $"Skipping {target.DisplayName} ItemManager sync compat: ItemManager ConfigSync could not be resolved.");
+            LogTargetWarningOnce($"Skipping {TargetDisplayName} ItemManager sync compat: ItemManager ConfigSync could not be resolved.");
             return;
         }
 
-        Dictionary<string, RecipeConfigDefinition> definitions = BuildDefinitions(target, plugin.Config, craftingTableType, toggleType);
+        Dictionary<string, RecipeConfigDefinition> definitions = BuildDefinitions(plugin.Config, craftingTableType, toggleType);
         if (definitions.Count == 0)
         {
             return;
@@ -168,7 +160,7 @@ internal static class WarfareItemManagerSyncCompat
         }
         catch (Exception exception)
         {
-            LogTargetWarningOnce(target, $"Failed while registering {target.DisplayName} ItemManager sync compat entries: {exception.Message}");
+            LogTargetWarningOnce($"Failed while registering {TargetDisplayName} ItemManager sync compat entries: {exception.Message}");
             return;
         }
         finally
@@ -179,19 +171,18 @@ internal static class WarfareItemManagerSyncCompat
         if (registeredCount > 0)
         {
             WarfareTweaksPlugin.ModLogger.LogInfo(
-                $"Registered {registeredCount} missing {target.DisplayName} ItemManager recipe config entry(ies) with ServerSync.");
+                $"Registered {registeredCount} missing {TargetDisplayName} ItemManager recipe config entry(ies) with ServerSync.");
         }
     }
 
     private static Dictionary<string, RecipeConfigDefinition> BuildDefinitions(
-        ItemManagerSyncTarget target,
         ConfigFile configFile,
         Type craftingTableType,
         Type toggleType)
     {
         Dictionary<string, RecipeConfigDefinition> definitions = new(StringComparer.Ordinal);
 
-        foreach (RecipeConfigSeed seed in target.KnownRecipeEntries)
+        foreach (RecipeConfigSeed seed in KnownRecipeEntries)
         {
             if (TryCreateDefinition(seed.Section, seed.Key, seed.DefaultValue, craftingTableType, toggleType, out RecipeConfigDefinition? definition))
             {
@@ -321,7 +312,9 @@ internal static class WarfareItemManagerSyncCompat
 
     private static ConfigEntryBase BindConfigEntry(ConfigFile configFile, RecipeConfigDefinition definition)
     {
-        MethodInfo bindMethod = ConfigFileBindMethod.MakeGenericMethod(definition.SettingType);
+        MethodInfo bindMethod = (ConfigFileBindMethod ??
+                                 throw new MissingMethodException("ConfigFile.Bind<T>(string, string, T, ConfigDescription) was not found."))
+            .MakeGenericMethod(definition.SettingType);
         ConfigDescription description = new(definition.Description);
         return (ConfigEntryBase)bindMethod.Invoke(
             configFile,
@@ -347,14 +340,16 @@ internal static class WarfareItemManagerSyncCompat
 
     private static void AddConfigEntry(object configSync, ConfigEntryBase entry)
     {
-        MethodInfo addConfigEntryMethod = configSync
+        MethodInfo? addConfigEntryMethod = configSync
             .GetType()
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Single(static method => method.Name == "AddConfigEntry" &&
-                                     method.IsGenericMethodDefinition &&
-                                     method.GetParameters().Length == 1);
+            .FirstOrDefault(static method => method.Name == "AddConfigEntry" &&
+                                            method.IsGenericMethodDefinition &&
+                                            method.GetParameters().Length == 1);
 
-        addConfigEntryMethod.MakeGenericMethod(entry.SettingType).Invoke(configSync, new object[] { entry });
+        (addConfigEntryMethod ?? throw new MissingMethodException("ItemManager ConfigSync.AddConfigEntry<T> was not found."))
+            .MakeGenericMethod(entry.SettingType)
+            .Invoke(configSync, new object[] { entry });
     }
 
     private static HashSet<string> GetRegisteredConfigKeys(object configSync)
@@ -390,10 +385,11 @@ internal static class WarfareItemManagerSyncCompat
         return false;
     }
 
-    private static void LogTargetWarningOnce(ItemManagerSyncTarget target, string message)
+    private static void LogTargetWarningOnce(string message)
     {
-        if (MissingTargetWarnings.Add(target.PluginGuid))
+        if (!_reportedTargetWarning)
         {
+            _reportedTargetWarning = true;
             WarfareTweaksPlugin.ModLogger.LogWarning(message);
         }
     }
@@ -406,22 +402,6 @@ internal static class WarfareItemManagerSyncCompat
     private static RecipeConfigSeed RecipeEntry(string section, string key, string defaultValue)
     {
         return new RecipeConfigSeed(section, key, defaultValue);
-    }
-
-    private readonly struct ItemManagerSyncTarget
-    {
-        public ItemManagerSyncTarget(string pluginGuid, string displayName, IReadOnlyList<RecipeConfigSeed> knownRecipeEntries)
-        {
-            PluginGuid = pluginGuid;
-            DisplayName = displayName;
-            KnownRecipeEntries = knownRecipeEntries;
-        }
-
-        public string PluginGuid { get; }
-
-        public string DisplayName { get; }
-
-        public IReadOnlyList<RecipeConfigSeed> KnownRecipeEntries { get; }
     }
 
     private readonly struct RecipeConfigSeed

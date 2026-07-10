@@ -13,7 +13,7 @@ internal static class DirectWeaponHitContextSystem
     internal static bool ShouldCountWeaponEffectHit =>
         _directHitDepth > 0 &&
         _characterDamageDepth == 1 &&
-        !WeaponEffectManager.IsApplyingGeneratedEffectDamage;
+        !WarfareTweaksBridge.IsExternalGeneratedDamageActive;
 
     internal static Scope BeginAttackHit(Attack attack)
     {
@@ -22,9 +22,10 @@ internal static class DirectWeaponHitContextSystem
             return default;
         }
 
+        string previousWeaponPrefabName = _weaponPrefabName;
         _weaponPrefabName = GetWeaponPrefabName(attack.m_weapon);
         _directHitDepth++;
-        return new Scope(ScopeKind.DirectHit);
+        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName);
     }
 
     internal static Scope BeginProjectileHit(Projectile projectile)
@@ -36,10 +37,11 @@ internal static class DirectWeaponHitContextSystem
             return default;
         }
 
+        string previousWeaponPrefabName = _weaponPrefabName;
         ItemDrop.ItemData? weapon = ProjectileAccess.GetWeapon(projectile);
         _weaponPrefabName = GetWeaponPrefabName(weapon);
         _directHitDepth++;
-        return new Scope(ScopeKind.DirectHit);
+        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName);
     }
 
     internal static Scope BeginCharacterDamage()
@@ -48,15 +50,16 @@ internal static class DirectWeaponHitContextSystem
         if (_directHitDepth == 0 &&
             WarfareTweaksBridge.TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName))
         {
+            string previousWeaponPrefabName = _weaponPrefabName;
             _weaponPrefabName = weaponPrefabName;
             _directHitDepth++;
-            return new Scope(ScopeKind.CharacterDamageWithExternalDirectHit);
+            return new Scope(ScopeKind.CharacterDamageWithExternalDirectHit, previousWeaponPrefabName);
         }
 
         return new Scope(ScopeKind.CharacterDamage);
     }
 
-    internal static bool TryGetCurrentProjectileWeaponPrefabName(out string prefabName)
+    internal static bool TryGetCurrentWeaponPrefabName(out string prefabName)
     {
         prefabName = _weaponPrefabName;
         return _directHitDepth > 0 && !string.IsNullOrWhiteSpace(prefabName);
@@ -73,10 +76,7 @@ internal static class DirectWeaponHitContextSystem
         {
             case ScopeKind.DirectHit when _directHitDepth > 0:
                 _directHitDepth--;
-                if (_directHitDepth == 0)
-                {
-                    _weaponPrefabName = "";
-                }
+                _weaponPrefabName = scope.PreviousWeaponPrefabName;
 
                 break;
             case ScopeKind.CharacterDamage when _characterDamageDepth > 0:
@@ -91,10 +91,7 @@ internal static class DirectWeaponHitContextSystem
                 if (_directHitDepth > 0)
                 {
                     _directHitDepth--;
-                    if (_directHitDepth == 0)
-                    {
-                        _weaponPrefabName = "";
-                    }
+                    _weaponPrefabName = scope.PreviousWeaponPrefabName;
                 }
 
                 break;
@@ -103,12 +100,15 @@ internal static class DirectWeaponHitContextSystem
 
     internal readonly struct Scope
     {
-        internal Scope(ScopeKind kind)
+        internal Scope(ScopeKind kind, string previousWeaponPrefabName = "")
         {
             Kind = kind;
+            PreviousWeaponPrefabName = previousWeaponPrefabName;
         }
 
         internal ScopeKind Kind { get; }
+
+        internal string PreviousWeaponPrefabName { get; }
     }
 
     internal enum ScopeKind

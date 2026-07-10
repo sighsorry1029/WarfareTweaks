@@ -114,7 +114,7 @@ internal static class DestructibleDamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "Destructible.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
     }
 }
 
@@ -123,7 +123,7 @@ internal static class MineRockDamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "MineRock.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
     }
 }
 
@@ -132,7 +132,7 @@ internal static class MineRock5DamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "MineRock5.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
     }
 }
 
@@ -141,8 +141,8 @@ internal static class TreeBaseDamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "TreeBase.Damage");
-        WarfareThrowableCompat.ApplyProjectileWoodCuttingSkillIfNeeded(hit, "TreeBase.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
+        WarfareThrowableCompat.ApplyProjectileWoodCuttingSkillIfNeeded(hit);
     }
 }
 
@@ -151,8 +151,8 @@ internal static class TreeLogDamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "TreeLog.Damage");
-        WarfareThrowableCompat.ApplyProjectileWoodCuttingSkillIfNeeded(hit, "TreeLog.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
+        WarfareThrowableCompat.ApplyProjectileWoodCuttingSkillIfNeeded(hit);
     }
 }
 
@@ -161,7 +161,7 @@ internal static class WearNTearDamageWarfareThrowablePatch
 {
     private static void Prefix(HitData hit)
     {
-        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit, "WearNTear.Damage");
+        WarfareThrowableCompat.ApplyProjectileToolTierIfNeeded(hit);
     }
 }
 
@@ -237,7 +237,7 @@ internal static class InventoryRemoveItemWarfareThrowablePatch
     [HarmonyPriority(Priority.First)]
     private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, "Inventory.RemoveItem(item)"))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
         {
             return true;
         }
@@ -251,9 +251,9 @@ internal static class InventoryRemoveItemWarfareThrowablePatch
 internal static class InventoryRemoveItemAmountWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item, int amount, ref bool __result)
+    private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, "Inventory.RemoveItem(item, amount)", amount))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
         {
             return true;
         }
@@ -269,7 +269,7 @@ internal static class InventoryRemoveOneItemWarfareThrowablePatch
     [HarmonyPriority(Priority.First)]
     private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, "Inventory.RemoveOneItem(item)", 1))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
         {
             return true;
         }
@@ -285,7 +285,7 @@ internal static class HumanoidUnequipItemWarfareThrowableAttackPatch
     [HarmonyPriority(Priority.First)]
     private static bool Prefix(ItemDrop.ItemData item)
     {
-        return !WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, "Humanoid.UnequipItem(item)");
+        return !WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, allowBrokenUnequip: true);
     }
 }
 
@@ -295,7 +295,7 @@ internal static class HumanoidConsumeItemWarfareThrowablePatch
     [HarmonyPriority(Priority.First)]
     private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, "Humanoid.ConsumeItem(item)", 1))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
         {
             return true;
         }
@@ -309,9 +309,9 @@ internal static class HumanoidConsumeItemWarfareThrowablePatch
 internal static class InventoryRemoveNamedItemWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(string name, int amount)
+    private static bool Prefix(string name)
     {
-        return !WarfareThrowableCompat.ShouldBlockNamedInventoryRemoval("Inventory.RemoveItem(name, amount, quality, worldLevel)", name, amount);
+        return !WarfareThrowableCompat.ShouldBlockNamedInventoryRemoval(name);
     }
 }
 

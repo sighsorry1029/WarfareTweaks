@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -11,27 +10,22 @@ using UnityEngine;
 
 namespace WarfareTweaks;
 
-internal static class WarfareCompat
+internal static partial class WarfareCompat
 {
-    internal const string WarfareGuid = "Therzie.Warfare";
     private const string WarfareStatusEffectsNamespace = "Warfare_StatusEffects.StatusEffects";
     private const string WarfareFireAndIceStatusEffectsNamespace = "WarfareFireAndIce_StatusEffects.StatusEffects";
     private const string WarfareUtilsTypeName = WarfareStatusEffectsNamespace + ".WarfareUtils";
 
     private static readonly Dictionary<string, HashSet<string>> SuppressedEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Dictionary<string, HashSet<string>> ManagedEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> ManagedChainLightningPrefabs = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<MethodBase, string> PatchedPrefixMethods = new();
     private static readonly Dictionary<MethodBase, string> PatchedAddToItemMethods = new();
     private static readonly Dictionary<string, WarfareAppliedAssignment> AppliedConfiguredAssignments = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, WarfareAttackSpawnOverrideState> AppliedAttackSpawnOverrides = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, WarfareAoeOverrideState> AppliedAoeOverrides = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, WarfareAttackStatusEffectOverrideState> AppliedAttackStatusEffectOverrides = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly ConditionalWeakTable<StatusEffect, WarfareBleedTuningState> BleedTuningsByStatus = new();
+    private static readonly ConditionalWeakTable<StatusEffect, WarfareBleedTuning> BleedTuningsByStatus = new();
     private static readonly ConditionalWeakTable<StatusEffect, WarfareHasteTuningState> HasteTuningsByStatus = new();
-    private static readonly ConditionalWeakTable<ItemDrop.ItemData.SharedData, ItemPrefabNameCacheEntry> ItemPrefabNamesBySharedData = new();
     private static readonly List<WarfareDotSourceDamageContext> ActiveDotSourceDamageContexts = new();
-    private static readonly Dictionary<ObjectDB, ObjectDbItemNameCache> ObjectDbItemNameCaches = new();
     private static readonly Dictionary<string, ConfiguredWarfareEffectLookup> ConfiguredEffectsByPrefabAndEffectId = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, Type> LoadedTypesByName = new(StringComparer.Ordinal);
     private static readonly Dictionary<Type, WarfareTargetAccessors> TargetAccessorsByEffectType = new();
@@ -213,17 +207,10 @@ internal static class WarfareCompat
     internal static void RebuildBuiltInEffects(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
     {
         SuppressedEffectsByPrefabName.Clear();
-        ManagedEffectsByPrefabName.Clear();
-        ManagedChainLightningPrefabs.Clear();
         RebuildConfiguredEffectLookup(effectConfigs);
 
         foreach (WarfareBuiltInEffectRegistration registration in BuiltInRegistrations)
         {
-            foreach (string prefabName in registration.PrefabNames)
-            {
-                AddManagedEffect(prefabName, registration.Id);
-            }
-
             if (!TryFindConfiguredEffect(effectConfigs, registration, out EffectBehaviorConfig? effectConfig) ||
                 effectConfig == null)
             {
@@ -231,26 +218,7 @@ internal static class WarfareCompat
                 continue;
             }
 
-            foreach (string prefabName in GetConfiguredPrefabNames(effectConfig))
-            {
-                AddManagedEffect(prefabName, registration.Id);
-            }
-
             AddSuppressedMissingDefaultAssignments(registration, effectConfig);
-        }
-
-        foreach (string prefabName in ChainLightningMistlandsDefaultPrefabs)
-        {
-            ManagedChainLightningPrefabs.Add(prefabName);
-        }
-
-        if (TryFindConfiguredChainLightningEffect(effectConfigs, out _, out EffectBehaviorConfig? chainLightningConfig) &&
-            chainLightningConfig != null)
-        {
-            foreach (string prefabName in GetConfiguredPrefabNames(chainLightningConfig))
-            {
-                ManagedChainLightningPrefabs.Add(prefabName);
-            }
         }
     }
 
@@ -419,693 +387,10 @@ internal static class WarfareCompat
         }
     }
 
-    internal static bool IsWarfareEffectId(string effectId)
-    {
-        return TryFindRegistration(effectId, out _);
-    }
-
     internal static bool ShouldSuppressBuiltIn(string weaponPrefabName, string effectId)
     {
         return SuppressedEffectsByPrefabName.TryGetValue(weaponPrefabName, out HashSet<string>? suppressedEffects) &&
                suppressedEffects.Contains(effectId);
-    }
-
-    internal static void AppendMissingConfiguredEffectTooltips(ItemDrop.ItemData item, ref string tooltip)
-    {
-        if (item?.m_shared == null ||
-            string.IsNullOrWhiteSpace(tooltip) ||
-            !TryResolveItemPrefabName(item, out string prefabName))
-        {
-            return;
-        }
-
-        HashSet<string> nativeTooltipEffectIds = GetNativeTooltipEffectIds(item);
-        List<string> fallbackBlocks = new();
-        foreach ((string configuredEffectId, EffectBehaviorConfig effectConfig) in WarfareTweaksPlugin.CurrentEffects)
-        {
-            string effectId = configuredEffectId?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(effectId) || effectConfig == null)
-            {
-                continue;
-            }
-
-            if (!WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName))
-            {
-                continue;
-            }
-
-            string? block = null;
-            if (TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration) &&
-                registration != null &&
-                !nativeTooltipEffectIds.Contains(registration.Id) &&
-                ShouldAppendFallbackTooltip(registration, tooltip))
-            {
-                block = BuildConfiguredFallbackTooltip(registration, effectConfig, prefabName);
-            }
-
-            if (!string.IsNullOrWhiteSpace(block) &&
-                !fallbackBlocks.Any(existing => string.Equals(existing, block, StringComparison.OrdinalIgnoreCase)))
-            {
-                fallbackBlocks.Add(block!);
-            }
-        }
-
-        if (fallbackBlocks.Count == 0)
-        {
-            return;
-        }
-
-        tooltip = tooltip.TrimEnd() + "\n\n" + string.Join("\n", fallbackBlocks);
-    }
-
-    private static HashSet<string> GetNativeTooltipEffectIds(ItemDrop.ItemData item)
-    {
-        HashSet<string> effectIds = new(StringComparer.OrdinalIgnoreCase);
-        if (item?.m_shared == null)
-        {
-            return effectIds;
-        }
-
-        AddNativeTooltipEffectIds(item.m_shared.m_equipStatusEffect, effectIds);
-        AddNativeTooltipEffectIds(item.m_shared.m_attackStatusEffect, effectIds);
-        return effectIds;
-    }
-
-    private static void AddNativeTooltipEffectIds(StatusEffect? statusEffect, HashSet<string> effectIds)
-    {
-        if (statusEffect == null)
-        {
-            return;
-        }
-
-        AddNativeTooltipEffectIds(((UnityEngine.Object)statusEffect).name, effectIds);
-        AddNativeTooltipEffectIds(statusEffect.m_name, effectIds);
-        AddNativeTooltipEffectIds(statusEffect.m_tooltip, effectIds);
-    }
-
-    private static void AddNativeTooltipEffectIds(string value, HashSet<string> effectIds)
-    {
-        string key = NormalizeStatusEffectKey(value);
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            return;
-        }
-
-        if (key.StartsWith("SE_AdrenalineLightning", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("adrenaline");
-            effectIds.Add("haste");
-            return;
-        }
-
-        if (key.StartsWith("SE_AdrenalineShred", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("adrenaline");
-            effectIds.Add("smasher");
-            return;
-        }
-
-        if (key.StartsWith("SE_Adrenaline", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("adrenaline");
-            return;
-        }
-
-        if (key.StartsWith("SE_Bash", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("bash");
-            return;
-        }
-
-        if (key.StartsWith("SE_Bleeding", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("bleeding");
-            return;
-        }
-
-        if (key.StartsWith("SE_Crusher", StringComparison.OrdinalIgnoreCase) ||
-            key.StartsWith("SE_Smasher", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("smasher");
-            return;
-        }
-
-        if (key.StartsWith("SE_Decapitator4", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("decapitator4");
-            return;
-        }
-
-        if (key.StartsWith("SE_Decapitator5", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("decapitator5");
-            return;
-        }
-
-        if (key.StartsWith("SE_Executioner", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("executioner");
-            return;
-        }
-
-        if (key.StartsWith("SE_Haste", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("haste");
-            return;
-        }
-
-        if (key.StartsWith("SE_Hunger", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("hackAndSlash");
-            effectIds.Add("bleedingSecondary");
-            return;
-        }
-
-        if (key.StartsWith("SE_Impale", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("impale");
-            return;
-        }
-
-        if (key.StartsWith("SE_Pinned", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("pinning");
-            return;
-        }
-
-        if (key.StartsWith("SE_Piercer", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("juggernaut");
-            effectIds.Add("pierceGreatbowFireAndIce");
-            effectIds.Add("piercingGreatbowMistlands");
-            effectIds.Add("piercingGreatbowModer");
-            effectIds.Add("piercingGreatbowPlains");
-            return;
-        }
-
-        if (key.StartsWith("SE_RipPiercer", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("juggernaut");
-            effectIds.Add("impale");
-            return;
-        }
-
-        if (key.StartsWith("SE_RipShred", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("decapitator4");
-            effectIds.Add("bleedingSecondary");
-            return;
-        }
-
-        if (key.StartsWith("SE_Rip", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("bleedingSecondary");
-            return;
-        }
-
-        if (key.StartsWith("SE_Vampirism", StringComparison.OrdinalIgnoreCase))
-        {
-            effectIds.Add("vampirism");
-        }
-    }
-
-    private static string NormalizeStatusEffectKey(string value)
-    {
-        string key = StripRichTextTags(value ?? "").Trim();
-        if (key.StartsWith("$", StringComparison.Ordinal))
-        {
-            key = key.Substring(1).Trim();
-        }
-
-        int whitespaceIndex = key.IndexOfAny(new[] { ' ', '\t', '\r', '\n' });
-        if (whitespaceIndex > 0)
-        {
-            key = key.Substring(0, whitespaceIndex);
-        }
-
-        key = key.Replace("_description_TW", "_TW", StringComparison.OrdinalIgnoreCase);
-        return key;
-    }
-
-    private static bool TryResolveItemPrefabName(ItemDrop.ItemData item, out string prefabName)
-    {
-        prefabName = "";
-        if (item?.m_dropPrefab != null)
-        {
-            prefabName = NormalizePrefabName(item.m_dropPrefab.name);
-            CacheItemPrefabName(item.m_shared, prefabName);
-            return !string.IsNullOrWhiteSpace(prefabName);
-        }
-
-        if (ObjectDB.instance?.m_items == null || item?.m_shared == null)
-        {
-            return false;
-        }
-
-        if (ItemPrefabNamesBySharedData.TryGetValue(item.m_shared, out ItemPrefabNameCacheEntry cachedEntry))
-        {
-            prefabName = cachedEntry.PrefabName;
-            return !string.IsNullOrWhiteSpace(prefabName);
-        }
-
-        foreach (GameObject prefab in ObjectDB.instance.m_items)
-        {
-            if (prefab == null)
-            {
-                continue;
-            }
-
-            ItemDrop? prefabItem = prefab.GetComponent<ItemDrop>();
-            if (prefabItem?.m_itemData?.m_shared == item.m_shared)
-            {
-                prefabName = NormalizePrefabName(prefab.name);
-                CacheItemPrefabName(item.m_shared, prefabName);
-                return !string.IsNullOrWhiteSpace(prefabName);
-            }
-        }
-
-        foreach (GameObject prefab in ObjectDB.instance.m_items)
-        {
-            if (prefab == null)
-            {
-                continue;
-            }
-
-            ItemDrop? prefabItem = prefab.GetComponent<ItemDrop>();
-            if (prefabItem?.m_itemData?.m_shared == null ||
-                !string.Equals(prefabItem.m_itemData.m_shared.m_name, item.m_shared.m_name, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            prefabName = NormalizePrefabName(prefab.name);
-            CacheItemPrefabName(item.m_shared, prefabName);
-            return !string.IsNullOrWhiteSpace(prefabName);
-        }
-
-        return false;
-    }
-
-    private static void CacheItemPrefabName(ItemDrop.ItemData.SharedData? sharedData, string prefabName)
-    {
-        if (sharedData == null || string.IsNullOrWhiteSpace(prefabName))
-        {
-            return;
-        }
-
-        ItemPrefabNamesBySharedData.Remove(sharedData);
-        ItemPrefabNamesBySharedData.Add(sharedData, new ItemPrefabNameCacheEntry(prefabName));
-    }
-
-    private static string NormalizePrefabName(string prefabName)
-    {
-        return (prefabName ?? "")
-            .Replace("(Clone)", "", StringComparison.OrdinalIgnoreCase)
-            .Trim();
-    }
-
-    private static bool ShouldAppendFallbackTooltip(WarfareBuiltInEffectRegistration registration, string tooltip)
-    {
-        return !TooltipContainsAny(tooltip, GetFallbackTooltipNeedles(registration.Id));
-    }
-
-    private static bool TooltipContainsAny(string tooltip, params string[] needles)
-    {
-        if (string.IsNullOrWhiteSpace(tooltip) || needles.Length == 0)
-        {
-            return false;
-        }
-
-        string[] lines = tooltip
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n')
-            .Split('\n');
-
-        foreach (string line in lines)
-        {
-            string normalizedLine = StripRichTextTags(line).Trim();
-            if (string.IsNullOrWhiteSpace(normalizedLine))
-            {
-                continue;
-            }
-
-            foreach (string needle in needles)
-            {
-                string normalizedNeedle = StripRichTextTags(needle).Trim();
-                if (string.IsNullOrWhiteSpace(normalizedNeedle))
-                {
-                    continue;
-                }
-
-                if (normalizedLine.Equals(normalizedNeedle, StringComparison.OrdinalIgnoreCase) ||
-                    normalizedLine.StartsWith(normalizedNeedle + ":", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static string StripRichTextTags(string text)
-    {
-        if (string.IsNullOrEmpty(text) || text.IndexOf('<') < 0)
-        {
-            return text ?? "";
-        }
-
-        char[] buffer = new char[text.Length];
-        int count = 0;
-        bool inTag = false;
-        foreach (char c in text)
-        {
-            if (c == '<')
-            {
-                inTag = true;
-                continue;
-            }
-
-            if (inTag)
-            {
-                if (c == '>')
-                {
-                    inTag = false;
-                }
-
-                continue;
-            }
-
-            buffer[count++] = c;
-        }
-
-        return new string(buffer, 0, count);
-    }
-
-    private static string BuildConfiguredFallbackTooltip(
-        WarfareBuiltInEffectRegistration registration,
-        EffectBehaviorConfig effectConfig,
-        string prefabName)
-    {
-        EffectBehaviorOverrideConfig? prefabOverride = TryGetPrefabOverride(effectConfig, prefabName);
-        string effectId = registration.Id;
-        string label = GetFallbackTooltipLabel(effectId);
-
-        if (string.Equals(effectId, "adrenaline", StringComparison.OrdinalIgnoreCase))
-        {
-            return TryResolveAdrenalineRestorePercent(effectConfig, prefabOverride, out float percent)
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipAdrenalineValue,
-                    "Restores {0}% of max stamina on the 5th hit against the same target.",
-                    FormatNumber(percent)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                    WarfareTweaksLocalization.TooltipAdrenaline,
-                    "Restores stamina on the 5th hit against the same target."));
-        }
-
-        if (string.Equals(effectId, "haste", StringComparison.OrdinalIgnoreCase))
-        {
-            float multiplier = ResolveConfiguredHasteMoveSpeedMultiplier(effectConfig, prefabOverride, 1.4f);
-            return BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                WarfareTweaksLocalization.TooltipHaste,
-                "Increases movement speed on the 6th hit against the same target. Multiplier: {0}x.",
-                FormatNumber(multiplier)));
-        }
-
-        if (string.Equals(effectId, "vampirism", StringComparison.OrdinalIgnoreCase))
-        {
-            int? value = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            return value.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipVampirismValue,
-                    "Restores {0}% of max health on the 5th hit against the same target.",
-                    FormatNumber(value.Value)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                    WarfareTweaksLocalization.TooltipVampirism,
-                    "Restores health on repeated hits against the same target."));
-        }
-
-        if (IsSourceDamageDotEffect(effectId))
-        {
-            float? damageFactor = ResolveConfiguredDamageFactor(effectConfig, prefabOverride);
-            string damageType = GetSourceDamageDotType(effectId);
-            return damageFactor.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipDotValue,
-                    "Applies {0} damage over time based on the triggering hit. Damage factor: {1}x.",
-                    damageType,
-                    FormatNumber(damageFactor.Value)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipDot,
-                    "Applies {0} damage over time based on the triggering hit.",
-                    damageType));
-        }
-
-        if (string.Equals(effectId, "bash", StringComparison.OrdinalIgnoreCase))
-        {
-            int? value = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            return value.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipBashValue,
-                    "Can stagger enemies on non-secondary hits. Chance: {0}%.",
-                    FormatNumber(value.Value)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                    WarfareTweaksLocalization.TooltipBash,
-                    "Can stagger enemies on non-secondary hits."));
-        }
-
-        if (string.Equals(effectId, "executioner", StringComparison.OrdinalIgnoreCase))
-        {
-            int? value = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            return value.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipExecutionerValue,
-                    "Deals bonus damage to targets at or below 25% health. Bonus: {0}%.",
-                    FormatNumber(value.Value)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                    WarfareTweaksLocalization.TooltipExecutioner,
-                    "Deals bonus damage to low-health targets."));
-        }
-
-        if (TryBuildResistanceWeaknessTooltip(effectId, label, out string resistanceTooltip))
-        {
-            return resistanceTooltip;
-        }
-
-        if (IsFixedExtraDamageEffect(effectId))
-        {
-            int? value = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            string damageType = GetFixedExtraDamageType(effectId);
-            return value.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipFixedExtraDamageValue,
-                    "Deals {0} extra {1} damage after repeated hits against the same target.",
-                    FormatNumber(value.Value),
-                    damageType))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipFixedExtraDamage,
-                    "Deals extra {0} damage after repeated hits against the same target.",
-                    damageType));
-        }
-
-        if (string.Equals(effectId, "pinning", StringComparison.OrdinalIgnoreCase))
-        {
-            int? value = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-            return value.HasValue
-                ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                    WarfareTweaksLocalization.TooltipPinningValue,
-                    "Slows targets hit for {0}s.",
-                    FormatNumber(value.Value)))
-                : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                    WarfareTweaksLocalization.TooltipPinning,
-                    "Slows targets hit for a brief moment."));
-        }
-
-        int? fallbackValue = ResolveConfiguredWarfareValue(registration, effectConfig, prefabOverride, prefabName);
-        return fallbackValue.HasValue
-            ? BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-                WarfareTweaksLocalization.TooltipFallbackValue,
-                "Warfare effect value: {0}.",
-                FormatNumber(fallbackValue.Value)))
-            : BuildTooltipLine(label, WarfareTweaksLocalization.Localize(
-                WarfareTweaksLocalization.TooltipFallback,
-                "Warfare effect assigned by WarfareTweaks."));
-    }
-
-    private static string BuildTooltipLine(string label, string body)
-    {
-        return $"<color=orange>{label}</color>: {body}";
-    }
-
-    private static string[] GetFallbackTooltipNeedles(string effectId)
-    {
-        string label = GetFallbackTooltipLabel(effectId);
-        return effectId switch
-        {
-            "adrenaline" => new[] { label, "$SE_Adrenaline_TW", "SE_Adrenaline_TW" },
-            "pinning" => new[] { label, "Pinned", "Pinning" },
-            "juggernaut" => new[] { label, "Juggernaut" },
-            "hackAndSlash" => new[] { label, "HacknSlash" },
-            "smasher" => new[] { label, "Crusher", "$SE_Crusher_TW", "SE_Crusher_TW" },
-            "smashAndBash" => new[] { label, "SmashnBash" },
-            _ => new[] { label }
-        };
-    }
-
-    private static string GetFallbackTooltipLabel(string effectId)
-    {
-        return effectId switch
-        {
-            "adrenaline" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectAdrenaline, "Adrenaline"),
-            "bash" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectBash, "Bash"),
-            "bleeding" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectBleeding, "Bleeding"),
-            "bleedingSecondary" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectBleedingSecondary, "Bleeding Secondary"),
-            "burningSecondary" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectBurningSecondary, "Burning Secondary"),
-            "decapitator4" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectDecapitator, "Decapitator"),
-            "decapitator5" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectDecapitator, "Decapitator"),
-            "executioner" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectExecutioner, "Executioner"),
-            "hackAndSlash" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectHackAndSlash, "Hack and Slash"),
-            "haste" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectHaste, "Haste"),
-            "impale" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectImpale, "Impale"),
-            "juggernaut" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPiercer, "Piercer"),
-            "lightningBurst" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectLightningBurst, "Lightning Burst"),
-            "pinning" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPinning, "Pinning"),
-            "pierceGreatbowFireAndIce" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPiercingGreatbow, "Piercing Greatbow"),
-            "piercingGreatbowMistlands" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPiercingGreatbow, "Piercing Greatbow"),
-            "piercingGreatbowModer" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPiercingGreatbow, "Piercing Greatbow"),
-            "piercingGreatbowPlains" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectPiercingGreatbow, "Piercing Greatbow"),
-            "smasher" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectSmasher, "Smasher"),
-            "smashAndBash" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectSmashAndBash, "Smash and Bash"),
-            "bludgeoner" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectBludgeoner, "Bludgeoner"),
-            "vampirism" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectVampirism, "Vampirism"),
-            _ => SplitCamelCase(effectId)
-        };
-    }
-
-    private static bool IsSourceDamageDotEffect(string effectId)
-    {
-        return effectId is "bleeding" or "bleedingSecondary" or "burningSecondary" or "impale";
-    }
-
-    private static string GetSourceDamageDotType(string effectId)
-    {
-        return effectId switch
-        {
-            "burningSecondary" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageFire, "fire"),
-            _ => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamagePierce, "pierce")
-        };
-    }
-
-    private static float? ResolveConfiguredDamageFactor(EffectBehaviorConfig effectConfig, EffectBehaviorOverrideConfig? prefabOverride)
-    {
-        return prefabOverride?.DamageFactor ?? effectConfig.DamageFactor;
-    }
-
-    private static bool TryBuildResistanceWeaknessTooltip(string effectId, string label, out string tooltip)
-    {
-        tooltip = "";
-        (string damageType, int hits, float window)? details = effectId switch
-        {
-            "decapitator4" => ("slash", 4, 6f),
-            "decapitator5" => ("slash", 5, 6f),
-            "hackAndSlash" => ("slash", 6, 2.5f),
-            "smasher" => ("blunt", 6, 6f),
-            "smashAndBash" => ("blunt", 6, 1f),
-            "bludgeoner" => ("blunt", 6, 3f),
-            "juggernaut" => ("pierce", 4, 6f),
-            _ => null
-        };
-
-        if (!details.HasValue)
-        {
-            return false;
-        }
-
-        tooltip = BuildTooltipLine(label, WarfareTweaksLocalization.Format(
-            WarfareTweaksLocalization.TooltipResistanceWeakness,
-            "Makes {0} damage count as weak on the {1}th hit against the same target within {2}s.",
-            LocalizeDamageType(details.Value.damageType),
-            details.Value.hits,
-            FormatNumber(details.Value.window)));
-        return true;
-    }
-
-    private static bool IsFixedExtraDamageEffect(string effectId)
-    {
-        return effectId is "lightningBurst" or
-            "pierceGreatbowFireAndIce" or
-            "piercingGreatbowMistlands" or
-            "piercingGreatbowModer" or
-            "piercingGreatbowPlains";
-    }
-
-    private static string GetFixedExtraDamageType(string effectId)
-    {
-        return effectId switch
-        {
-            "lightningBurst" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageLightning, "lightning"),
-            "piercingGreatbowModer" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageFrost, "frost"),
-            _ => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamagePierce, "pierce")
-        };
-    }
-
-    private static string LocalizeDamageType(string damageType)
-    {
-        return damageType switch
-        {
-            "blunt" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageBlunt, "blunt"),
-            "fire" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageFire, "fire"),
-            "frost" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageFrost, "frost"),
-            "lightning" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageLightning, "lightning"),
-            "pierce" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamagePierce, "pierce"),
-            "slash" => WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.DamageSlash, "slash"),
-            _ => damageType
-        };
-    }
-
-    private static string SplitCamelCase(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return WarfareTweaksLocalization.Localize(WarfareTweaksLocalization.EffectFallback, "Warfare Effect");
-        }
-
-        string result = "";
-        for (int i = 0; i < value.Length; i++)
-        {
-            char c = value[i];
-            if (i > 0 && char.IsUpper(c) && !char.IsWhiteSpace(value[i - 1]))
-            {
-                result += " ";
-            }
-
-            result += i == 0 ? char.ToUpperInvariant(c) : c;
-        }
-
-        return result;
-    }
-
-    private static float ResolveConfiguredHasteMoveSpeedMultiplier(
-        EffectBehaviorConfig effectConfig,
-        EffectBehaviorOverrideConfig? prefabOverride,
-        float defaultValue)
-    {
-        if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
-        {
-            return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
-        }
-
-        if (!Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f))
-        {
-            return Mathf.Max(0f, effectConfig.MoveSpeedMultiplier);
-        }
-
-        return defaultValue;
-    }
-
-    private static string FormatNumber(float value)
-    {
-        return value.ToString("0.###", CultureInfo.InvariantCulture);
     }
 
     private static bool TryFindConfiguredEffect(
@@ -1132,6 +417,7 @@ internal static class WarfareCompat
     private static void RebuildConfiguredEffectLookup(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
     {
         ConfiguredEffectsByPrefabAndEffectId.Clear();
+        ConfiguredTooltipEffectsByPrefabName.Clear();
         foreach ((string effectId, EffectBehaviorConfig effectConfig) in effectConfigs)
         {
             string configuredEffectId = effectId?.Trim() ?? "";
@@ -1144,11 +430,12 @@ internal static class WarfareCompat
 
             foreach (string prefabName in GetConfiguredPrefabNames(effectConfig))
             {
-                ConfiguredEffectsByPrefabAndEffectId[ConfiguredEffectLookupKey(prefabName, registration.Id)] =
-                    new ConfiguredWarfareEffectLookup(
-                        registration,
-                        effectConfig,
-                        TryGetPrefabOverride(effectConfig, prefabName));
+                ConfiguredWarfareEffectLookup lookup = new(
+                    registration,
+                    effectConfig,
+                    TryGetPrefabOverride(effectConfig, prefabName));
+                ConfiguredEffectsByPrefabAndEffectId[ConfiguredEffectLookupKey(prefabName, registration.Id)] = lookup;
+                AddConfiguredTooltipEffect(prefabName, lookup);
             }
         }
     }
@@ -1205,6 +492,14 @@ internal static class WarfareCompat
         }
     }
 
+    private static bool HasPrefabAssignment(EffectBehaviorConfig effectConfig, string prefabName)
+    {
+        return effectConfig.Prefabs != null &&
+               !string.IsNullOrWhiteSpace(prefabName) &&
+               effectConfig.Prefabs.Keys.Any(configuredPrefabName =>
+                   string.Equals(configuredPrefabName?.Trim(), prefabName, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool TryFindConfiguredChainLightningEffect(
         IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs,
         out string effectId,
@@ -1243,24 +538,13 @@ internal static class WarfareCompat
     {
         foreach (string prefabName in registration.PrefabNames)
         {
-            if (WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName))
+            if (HasPrefabAssignment(effectConfig, prefabName))
             {
                 continue;
             }
 
             AddSuppressedEffect(prefabName, registration.Id);
         }
-    }
-
-    private static void AddManagedEffect(string prefabName, string effectId)
-    {
-        if (!ManagedEffectsByPrefabName.TryGetValue(prefabName, out HashSet<string>? effects))
-        {
-            effects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            ManagedEffectsByPrefabName[prefabName] = effects;
-        }
-
-        effects.Add(effectId);
     }
 
     private static void AddSuppressedEffect(string prefabName, string effectId)
@@ -1274,51 +558,12 @@ internal static class WarfareCompat
         effects.Add(effectId);
     }
 
-    private static bool TryResolveSuppressedBuiltInIds(string effectId, out string[] builtInIds)
-    {
-        switch ((effectId ?? "").Trim().ToLowerInvariant())
-        {
-            case "adrenaline":
-                builtInIds = new[] { "adrenaline" };
-                return true;
-            case "bash":
-                builtInIds = new[] { "bash" };
-                return true;
-            case "bleeding":
-                builtInIds = new[] { "bleeding", "bleedingSecondary", "impale" };
-                return true;
-            case "decapitator":
-                builtInIds = new[] { "decapitator4", "decapitator5", "hackAndSlash" };
-                return true;
-            case "executioner":
-                builtInIds = new[] { "executioner" };
-                return true;
-            case "haste":
-                builtInIds = new[] { "haste" };
-                return true;
-            case "juggernaut":
-                builtInIds = new[] { "juggernaut" };
-                return true;
-            case "piercing":
-                builtInIds = new[] { "piercingGreatbowMistlands", "piercingGreatbowModer", "piercingGreatbowPlains" };
-                return true;
-            case "smasher":
-                builtInIds = new[] { "smasher" };
-                return true;
-            case "vampirism":
-                builtInIds = new[] { "vampirism" };
-                return true;
-            default:
-                builtInIds = Array.Empty<string>();
-                return false;
-        }
-    }
-
     private static bool SuppressBuiltInPrefix(MethodBase __originalMethod)
     {
         return __originalMethod == null ||
                !PatchedPrefixMethods.TryGetValue(__originalMethod, out string? effectId) ||
-               !WeaponEffectManager.ShouldSuppressWarfareBuiltIn(effectId);
+               !DirectWeaponHitContextSystem.TryGetCurrentWeaponPrefabName(out string prefabName) ||
+               !ShouldSuppressBuiltIn(prefabName, effectId);
     }
 
     // Harmony hook installers are grouped before the resolver methods they patch into.
@@ -1341,7 +586,7 @@ internal static class WarfareCompat
 
     private static bool WarfareTryGetAttackWeaponPrefix(ref string prefab, ref bool __result)
     {
-        if (!DirectWeaponHitContextSystem.TryGetCurrentProjectileWeaponPrefabName(out string weaponPrefabName))
+        if (!DirectWeaponHitContextSystem.TryGetCurrentWeaponPrefabName(out string weaponPrefabName))
         {
             return true;
         }
@@ -1734,27 +979,27 @@ internal static class WarfareCompat
 
     private static IEnumerable<CodeInstruction> WarfareBleedingDotStatusUpdateTranspiler(IEnumerable<CodeInstruction> instructions)
     {
-        return ReplaceWarfareBleedUpdateConstants(instructions, tickIntervalDefault: 1f, damageCoefficientDefault: 0.0025f);
+        return ReplaceWarfareBleedUpdateConstants(instructions, "bleeding", tickIntervalDefault: 1f, damageCoefficientDefault: 0.0025f);
     }
 
     private static IEnumerable<CodeInstruction> WarfareBleedingSecondaryStatusUpdateTranspiler(IEnumerable<CodeInstruction> instructions)
     {
-        return ReplaceWarfareBleedUpdateConstants(instructions, tickIntervalDefault: 1f, damageCoefficientDefault: 0.00125f);
+        return ReplaceWarfareBleedUpdateConstants(instructions, "bleedingSecondary", tickIntervalDefault: 1f, damageCoefficientDefault: 0.00125f);
     }
 
     private static IEnumerable<CodeInstruction> WarfareImpaleStatusUpdateTranspiler(IEnumerable<CodeInstruction> instructions)
     {
-        return ReplaceWarfareBleedUpdateConstants(instructions, tickIntervalDefault: 1f, damageCoefficientDefault: 0.0025f);
+        return ReplaceWarfareBleedUpdateConstants(instructions, "impale", tickIntervalDefault: 1f, damageCoefficientDefault: 0.0025f);
     }
 
     private static IEnumerable<CodeInstruction> WarfareBurningSecondaryStatusUpdateTranspiler(IEnumerable<CodeInstruction> instructions)
     {
-        return ReplaceWarfareBleedUpdateConstants(instructions, tickIntervalDefault: 1f, damageCoefficientDefault: 0.00125f);
+        return ReplaceWarfareBleedUpdateConstants(instructions, "burningSecondary", tickIntervalDefault: 1f, damageCoefficientDefault: 0.00125f);
     }
 
     private static IEnumerable<CodeInstruction> WarfareFireAndIceBurningSecondaryStatusUpdateTranspiler(IEnumerable<CodeInstruction> instructions)
     {
-        return ReplaceWarfareFlatDotDamageConstant(instructions, damageDefault: 20);
+        return ReplaceWarfareFlatDotDamageConstant(instructions, damageDefault: 20, effectId: "burningSecondary");
     }
 
     private static IEnumerable<CodeInstruction> WarfarePiercingGreatbowMistlandsSetLevelTranspiler(IEnumerable<CodeInstruction> instructions)
@@ -1785,6 +1030,7 @@ internal static class WarfareCompat
     private static IEnumerable<CodeInstruction> WarfareAdrenalineSetLevelTranspiler(IEnumerable<CodeInstruction> instructions)
     {
         MethodInfo divisorResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareAdrenalineDivisor));
+        bool replaced = false;
         foreach (CodeInstruction instruction in instructions)
         {
             if (IsLdcR4(instruction, 350f))
@@ -1794,20 +1040,29 @@ internal static class WarfareCompat
                     yield return replacement;
                 }
 
+                replaced = true;
                 continue;
             }
 
             yield return instruction;
         }
+
+        if (!replaced)
+        {
+            ReportTranspilerMismatch("adrenaline", "stamina divisor 350");
+        }
     }
 
     private static IEnumerable<CodeInstruction> ReplaceWarfareBleedUpdateConstants(
         IEnumerable<CodeInstruction> instructions,
+        string effectId,
         float tickIntervalDefault,
         float damageCoefficientDefault)
     {
         MethodInfo tickIntervalResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareBleedTickInterval));
         MethodInfo damageCoefficientResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareBleedDamageCoefficient));
+        bool replacedTickInterval = false;
+        bool replacedDamageCoefficient = false;
         foreach (CodeInstruction instruction in instructions)
         {
             if (IsLdcR4(instruction, tickIntervalDefault))
@@ -1817,6 +1072,7 @@ internal static class WarfareCompat
                     yield return replacement;
                 }
 
+                replacedTickInterval = true;
                 continue;
             }
 
@@ -1827,10 +1083,21 @@ internal static class WarfareCompat
                     yield return replacement;
                 }
 
+                replacedDamageCoefficient = true;
                 continue;
             }
 
             yield return instruction;
+        }
+
+        if (!replacedTickInterval)
+        {
+            ReportTranspilerMismatch(effectId, $"tick interval {tickIntervalDefault}");
+        }
+
+        if (!replacedDamageCoefficient)
+        {
+            ReportTranspilerMismatch(effectId, $"damage coefficient {damageCoefficientDefault}");
         }
     }
 
@@ -1856,11 +1123,17 @@ internal static class WarfareCompat
 
             yield return instruction;
         }
+
+        if (!replaced)
+        {
+            ReportTranspilerMismatch(effectId, $"fixed damage {damageDefault}");
+        }
     }
 
     private static IEnumerable<CodeInstruction> ReplaceWarfareFlatDotDamageConstant(
         IEnumerable<CodeInstruction> instructions,
-        int damageDefault)
+        int damageDefault,
+        string effectId)
     {
         MethodInfo damageResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareFlatDotTickDamage));
         bool replaced = false;
@@ -1881,6 +1154,21 @@ internal static class WarfareCompat
             }
 
             yield return instruction;
+        }
+
+        if (!replaced)
+        {
+            ReportTranspilerMismatch(effectId, $"flat damage {damageDefault}");
+        }
+    }
+
+    private static void ReportTranspilerMismatch(string effectId, string expectedValue)
+    {
+        string warningKey = $"warfare_transpiler_mismatch_{effectId}_{expectedValue}";
+        if (WarfareTweaksWarningLog.TryMarkReported(warningKey))
+        {
+            WarfareTweaksPlugin.ModLogger.LogWarning(
+                $"Warfare effect '{effectId}' tuning was not installed because the expected {expectedValue} constant was not found. Warfare may have changed.");
         }
     }
 
@@ -1976,7 +1264,7 @@ internal static class WarfareCompat
     private static float ResolveWarfareBleedTickInterval(object statusObject, float vanillaValue)
     {
         if (statusObject is not StatusEffect status ||
-            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuningState? tuning) ||
+            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuning? tuning) ||
             tuning == null)
         {
             return vanillaValue;
@@ -1995,7 +1283,7 @@ internal static class WarfareCompat
     private static float ResolveWarfareBleedDamageCoefficient(object statusObject, float vanillaValue)
     {
         if (statusObject is not StatusEffect status ||
-            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuningState? tuning) ||
+            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuning? tuning) ||
             tuning == null)
         {
             return vanillaValue;
@@ -2014,7 +1302,7 @@ internal static class WarfareCompat
     private static int ResolveWarfareFlatDotTickDamage(object statusObject, int vanillaValue)
     {
         if (statusObject is not StatusEffect status ||
-            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuningState? tuning) ||
+            !TryGetStoredWarfareBleedTuning(status, out WarfareBleedTuning? tuning) ||
             tuning == null ||
             !tuning.UseSourceDamageDot)
         {
@@ -2109,7 +1397,7 @@ internal static class WarfareCompat
         }
     }
 
-    private static float ResolveSourceDamageDotCoefficient(StatusEffect status, WarfareBleedTuningState tuning)
+    private static float ResolveSourceDamageDotCoefficient(StatusEffect status, WarfareBleedTuning tuning)
     {
         float targetMaxHealth = status.m_character != null ? Mathf.Max(0f, status.m_character.GetMaxHealth()) : 0f;
         int nativeValue = Mathf.Max(1, tuning.NativeValue ?? 1);
@@ -2123,7 +1411,7 @@ internal static class WarfareCompat
         return ResolveSourceDamageDotTickDamage(tuning) / (targetMaxHealth * nativeValue);
     }
 
-    private static float ResolveSourceDamageDotTickDamage(WarfareBleedTuningState tuning)
+    private static float ResolveSourceDamageDotTickDamage(WarfareBleedTuning tuning)
     {
         float damageFactor = Mathf.Max(0f, tuning.DamageFactor ?? 0f);
         float sourceDamage = Mathf.Max(0f, tuning.SourceDamage ?? 0f);
@@ -2146,7 +1434,7 @@ internal static class WarfareCompat
         if (TryGetActiveDotSourceDamage(status.m_character, tuning.PrefabName, out float sourceDamage) ||
             TryGetCurrentAttackRawDamage(tuning.PrefabName, out sourceDamage))
         {
-            tuning.SourceDamage = sourceDamage;
+            tuning.SetSourceDamage(sourceDamage);
         }
     }
 
@@ -2274,7 +1562,7 @@ internal static class WarfareCompat
 
     private static bool TryGetCurrentAttackWeaponPrefabName(out string prefabName)
     {
-        if (TryGetProjectileHitWeaponPrefabName(out prefabName))
+        if (DirectWeaponHitContextSystem.TryGetCurrentWeaponPrefabName(out prefabName))
         {
             return true;
         }
@@ -2295,32 +1583,13 @@ internal static class WarfareCompat
         return !string.IsNullOrWhiteSpace(prefabName);
     }
 
-    private static bool TryGetProjectileHitWeaponPrefabName(out string prefabName)
-    {
-        prefabName = "";
-        if (!WarfareTweaksRuntimeFacade.TryGetProjectileHitAttackContext(
-                out string contextWeaponPrefabName,
-                out bool secondaryAttack,
-                out _,
-                out bool disableCurrentAttackFallback) ||
-            secondaryAttack ||
-            disableCurrentAttackFallback ||
-            string.IsNullOrWhiteSpace(contextWeaponPrefabName))
-        {
-            return false;
-        }
-
-        prefabName = contextWeaponPrefabName;
-        return true;
-    }
-
     internal static WarfareDotSourceDamageScope BeginWarfareDotSourceDamage(Character target, HitData hit)
     {
         if (target == null ||
             hit == null ||
             hit.GetAttacker() != Player.m_localPlayer ||
             !DirectWeaponHitContextSystem.IsDirectWeaponHitActive ||
-            WeaponEffectManager.IsApplyingGeneratedEffectDamage ||
+            WarfareTweaksBridge.IsExternalGeneratedDamageActive ||
             !TryGetCurrentAttackWeaponPrefabName(out string prefabName))
         {
             return default;
@@ -2396,12 +1665,11 @@ internal static class WarfareCompat
     private static void StoreWarfareBleedTuning(StatusEffect status, WarfareBleedTuning tuning)
     {
         BleedTuningsByStatus.Remove(status);
-        WarfareBleedTuningState state = new(tuning);
-        BleedTuningsByStatus.Add(status, state);
-        RegisterWarfareBleedStatusWithActiveSourceContext(status, tuning.PrefabName, state);
+        BleedTuningsByStatus.Add(status, tuning);
+        RegisterWarfareBleedStatusWithActiveSourceContext(status, tuning.PrefabName, tuning);
     }
 
-    private static bool TryGetStoredWarfareBleedTuning(StatusEffect status, out WarfareBleedTuningState? tuning)
+    private static bool TryGetStoredWarfareBleedTuning(StatusEffect status, out WarfareBleedTuning? tuning)
     {
         return BleedTuningsByStatus.TryGetValue(status, out tuning);
     }
@@ -2409,9 +1677,9 @@ internal static class WarfareCompat
     private static void RegisterWarfareBleedStatusWithActiveSourceContext(
         StatusEffect status,
         string prefabName,
-        WarfareBleedTuningState state)
+        WarfareBleedTuning tuning)
     {
-        if (status.m_character == null || !state.UseSourceDamageDot)
+        if (status.m_character == null || !tuning.UseSourceDamageDot)
         {
             return;
         }
@@ -2422,7 +1690,7 @@ internal static class WarfareCompat
             if (context.Target == status.m_character &&
                 string.Equals(context.WeaponPrefabName, prefabName, StringComparison.OrdinalIgnoreCase))
             {
-                context.RegisterState(state);
+                context.RegisterTuning(tuning);
                 return;
             }
         }
@@ -2598,39 +1866,9 @@ internal static class WarfareCompat
 
     private static bool ContainsObjectDbItem(ObjectDB objectDb, string prefabName)
     {
-        if (objectDb?.m_items == null || string.IsNullOrWhiteSpace(prefabName))
-        {
-            return false;
-        }
-
-        ObjectDbItemNameCache cache = GetObjectDbItemNameCache(objectDb);
-        return cache.ItemNames.Contains(prefabName);
-    }
-
-    private static ObjectDbItemNameCache GetObjectDbItemNameCache(ObjectDB objectDb)
-    {
-        int itemCount = objectDb.m_items?.Count ?? 0;
-        if (ObjectDbItemNameCaches.TryGetValue(objectDb, out ObjectDbItemNameCache? cache) &&
-            cache.ItemCount == itemCount)
-        {
-            return cache;
-        }
-
-        HashSet<string> itemNames = new(StringComparer.OrdinalIgnoreCase);
-        if (objectDb.m_items != null)
-        {
-            foreach (GameObject item in objectDb.m_items)
-            {
-                if (item != null)
-                {
-                    itemNames.Add(item.name);
-                }
-            }
-        }
-
-        cache = new ObjectDbItemNameCache(itemCount, itemNames);
-        ObjectDbItemNameCaches[objectDb] = cache;
-        return cache;
+        return objectDb != null &&
+               !string.IsNullOrWhiteSpace(prefabName) &&
+               objectDb.GetItemPrefab(prefabName) != null;
     }
 
     private static bool TryApplyChainLightningConfig(
@@ -2745,7 +1983,7 @@ internal static class WarfareCompat
 
         foreach (string prefabName in ChainLightningMistlandsDefaultPrefabs)
         {
-            if (WarfareEffectConfigHelpers.HasPrefabAssignment(effectConfig, prefabName))
+            if (HasPrefabAssignment(effectConfig, prefabName))
             {
                 continue;
             }
@@ -2856,38 +2094,17 @@ internal static class WarfareCompat
             return scenePrefab;
         }
 
-        if (objectDb?.m_items != null)
-        {
-            foreach (GameObject item in objectDb.m_items)
-            {
-                if (item != null && string.Equals(item.name, prefabName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return item;
-                }
-            }
-        }
-
-        return null;
+        return objectDb != null ? objectDb.GetItemPrefab(prefabName) : null;
     }
 
     private static ItemDrop.ItemData.SharedData? FindItemSharedData(ObjectDB objectDb, string prefabName)
     {
-        if (objectDb?.m_items == null || string.IsNullOrWhiteSpace(prefabName))
+        if (objectDb == null || string.IsNullOrWhiteSpace(prefabName))
         {
             return null;
         }
 
-        foreach (GameObject item in objectDb.m_items)
-        {
-            if (item == null || !string.Equals(item.name, prefabName, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            return item.GetComponent<ItemDrop>()?.m_itemData?.m_shared;
-        }
-
-        return null;
+        return objectDb.GetItemPrefab(prefabName)?.GetComponent<ItemDrop>()?.m_itemData?.m_shared;
     }
 
     private static EffectBehaviorOverrideConfig? TryGetPrefabOverride(EffectBehaviorConfig effectConfig, string prefabName)
@@ -3671,21 +2888,11 @@ internal static class WarfareCompat
 
         public WarfareEffectTypeSpec[] EffectTypeSpecs { get; }
 
-        public string StatusEffectsNamespace => EffectTypeSpecs[0].StatusEffectsNamespace;
-
-        public string PatchTypeName => EffectTypeSpecs[0].PatchTypeName;
-
-        public string CharacterDamagePatchTypeName => $"{StatusEffectsNamespace}.{PatchTypeName}+Character_Damage_Patch";
-
-        public string EffectTypeName => EffectTypeSpecs[0].EffectTypeName;
-
         public string[] EffectTypeNames => EffectTypeSpecs.Select(spec => spec.EffectTypeName).ToArray();
 
         public string[] PrefabNames { get; }
 
         public string[] EffectIds { get; }
-
-        public bool RequiresValue => _defaultAssignmentsByPrefabName.Values.Any(assignment => assignment.Value.HasValue);
 
         public int? GetDefaultValue(string prefabName)
         {
@@ -3699,12 +2906,6 @@ internal static class WarfareCompat
             return _defaultAssignmentsByPrefabName.TryGetValue(prefabName, out WarfareDefaultAssignment? assignment)
                 ? assignment.EffectTypeName
                 : null;
-        }
-
-        public bool IsDefaultAssignment(string prefabName, int? value)
-        {
-            return _defaultAssignmentsByPrefabName.TryGetValue(prefabName, out WarfareDefaultAssignment? assignment) &&
-                   assignment.Value == value;
         }
 
         private static Dictionary<string, WarfareDefaultAssignment> ParsePrefabSpecs(IEnumerable<WarfareEffectTypeSpec> effectTypeSpecs)
@@ -3880,7 +3081,7 @@ internal static class WarfareCompat
 
         public int? NativeValue { get; set; }
 
-        public float? SourceDamage { get; set; }
+        public float? SourceDamage { get; private set; }
 
         public bool HasAnyValue =>
             StacksRequired.HasValue ||
@@ -3888,28 +3089,6 @@ internal static class WarfareCompat
             Duration.HasValue ||
             TickInterval.HasValue ||
             DamageFactor.HasValue;
-    }
-
-    private sealed class WarfareBleedTuningState
-    {
-        public WarfareBleedTuningState(WarfareBleedTuning tuning)
-        {
-            Duration = tuning.Duration;
-            TickInterval = tuning.TickInterval;
-            DamageFactor = tuning.DamageFactor;
-            NativeValue = tuning.NativeValue;
-            SourceDamage = tuning.SourceDamage;
-        }
-
-        public float? Duration { get; }
-
-        public float? TickInterval { get; }
-
-        public float? DamageFactor { get; }
-
-        public int? NativeValue { get; }
-
-        public float? SourceDamage { get; private set; }
 
         public bool UseSourceDamageDot => DamageFactor.HasValue;
 
@@ -3929,32 +3108,9 @@ internal static class WarfareCompat
         public float MoveSpeedMultiplier { get; }
     }
 
-    private sealed class ItemPrefabNameCacheEntry
-    {
-        public ItemPrefabNameCacheEntry(string prefabName)
-        {
-            PrefabName = prefabName;
-        }
-
-        public string PrefabName { get; }
-    }
-
-    private sealed class ObjectDbItemNameCache
-    {
-        public ObjectDbItemNameCache(int itemCount, HashSet<string> itemNames)
-        {
-            ItemCount = itemCount;
-            ItemNames = itemNames;
-        }
-
-        public int ItemCount { get; }
-
-        public HashSet<string> ItemNames { get; }
-    }
-
     private sealed class WarfareDotSourceDamageContext
     {
-        private readonly List<WarfareBleedTuningState> _states = new();
+        private readonly List<WarfareBleedTuning> _tunings = new();
 
         public WarfareDotSourceDamageContext(Character target, string weaponPrefabName, float sourceDamage, float healthBefore)
         {
@@ -3972,19 +3128,19 @@ internal static class WarfareCompat
 
         public float HealthBefore { get; }
 
-        public void RegisterState(WarfareBleedTuningState state)
+        public void RegisterTuning(WarfareBleedTuning tuning)
         {
-            if (!_states.Contains(state))
+            if (!_tunings.Contains(tuning))
             {
-                _states.Add(state);
+                _tunings.Add(tuning);
             }
         }
 
         public void ApplyActualDamage(float actualDamage)
         {
-            foreach (WarfareBleedTuningState state in _states)
+            foreach (WarfareBleedTuning tuning in _tunings)
             {
-                state.SetSourceDamage(actualDamage);
+                tuning.SetSourceDamage(actualDamage);
             }
         }
     }

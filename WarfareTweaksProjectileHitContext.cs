@@ -49,38 +49,3 @@ internal readonly struct ProjectileHitContext
 
     public Projectile? Projectile { get; }
 }
-
-internal static class WarfareTweaksRuntimeContext
-{
-    internal static bool TryPeekProjectileHitContext(out ProjectileHitContext context)
-    {
-        return WarfareTweaksProjectileHitContext.TryPeek(out context);
-    }
-}
-
-internal static class WarfareTweaksRuntimeFacade
-{
-    internal static bool TryGetProjectileHitAttackContext(
-        out string weaponPrefabName,
-        out bool secondaryAttack,
-        out object? definition,
-        out bool disableCurrentAttackFallback)
-    {
-        weaponPrefabName = "";
-        secondaryAttack = false;
-        definition = null;
-        disableCurrentAttackFallback = false;
-        return DirectWeaponHitContextSystem.TryGetCurrentProjectileWeaponPrefabName(out weaponPrefabName);
-    }
-}
-
-internal static class WeaponEffectManager
-{
-    internal static bool IsApplyingGeneratedEffectDamage => WarfareTweaksBridge.IsExternalGeneratedDamageActive;
-
-    internal static bool ShouldSuppressWarfareBuiltIn(string effectId)
-    {
-        return DirectWeaponHitContextSystem.TryGetCurrentProjectileWeaponPrefabName(out string prefabName) &&
-               WarfareCompat.ShouldSuppressBuiltIn(prefabName, effectId);
-    }
-}

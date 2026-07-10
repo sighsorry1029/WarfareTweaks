@@ -550,13 +550,11 @@
     <Compile Include="DirectWeaponHitContextSystem.cs" />
     <Compile Include="LocalizationManager.cs" />
     <Compile Include="ProjectileAccess.cs" />
-    <Compile Include="WarfareEffectConfigHelpers.cs" />
     <Compile Include="WarfareTweaksLocalization.cs" />
     <Compile Include="WarfareTweaksBridge.cs" />
     <Compile Include="WarfareTweaksCompat.cs" />
     <Compile Include="WarfareTweaksConfigLoader.cs" />
     <Compile Include="WarfareTweaksConfigModels.cs" />
-    <Compile Include="WarfareTweaksConfigExtensions.cs" />
     <Compile Include="WarfareTweaksDefaultYamlResources.cs" />
     <Compile Include="WarfareTweaksHarmonyHooks.cs" />
     <Compile Include="WarfareTweaksPlugin.cs" />
@@ -564,6 +562,7 @@
     <Compile Include="WarfareTweaksWarningLog.cs" />
     <Compile Include="Compat\JewelcraftingThrowableCompat.cs" />
     <Compile Include="Compat\WarfareCompat.cs" />
+    <Compile Include="Compat\WarfareCompat.Tooltips.cs" />
     <Compile Include="Compat\WarfareItemManagerSyncCompat.cs" />
     <Compile Include="Compat\WarfareSkillCompat.cs" />
     <Compile Include="Compat\WarfareThrowableCompat.cs" />

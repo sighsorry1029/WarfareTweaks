@@ -3,58 +3,32 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text;
 using BepInEx;
-using BepInEx.Bootstrap;
 using HarmonyLib;
 using UnityEngine;
 using YamlDotNet.Serialization;
 
 namespace LocalizationManager;
 
-public class Localizer
+internal static class Localizer
 {
-    private static readonly Dictionary<string, Dictionary<string, string>> LoadedTexts = new();
-    private static readonly ConditionalWeakTable<Localization, string> LocalizationLanguage = new();
-    private static readonly List<WeakReference<Localization>> LocalizationObjects = new();
     private static readonly string[] FileExtensions = { ".json", ".yml" };
     private static BaseUnityPlugin? _plugin;
 
-    private static BaseUnityPlugin Plugin
+    private static BaseUnityPlugin Plugin =>
+        _plugin ?? throw new InvalidOperationException("Localization was used before the plugin was registered.");
+
+    internal static void Load(BaseUnityPlugin plugin)
     {
-        get
-        {
-            if (_plugin == null)
-            {
-                IEnumerable<TypeInfo> types;
-                try
-                {
-                    types = Assembly.GetExecutingAssembly().DefinedTypes.ToList();
-                }
-                catch (ReflectionTypeLoadException e)
-                {
-                    types = e.Types.Where(type => type != null).Select(type => type!.GetTypeInfo());
-                }
-
-                _plugin = (BaseUnityPlugin)Chainloader.ManagerObject.GetComponent(
-                    types.First(type => type.IsClass && typeof(BaseUnityPlugin).IsAssignableFrom(type)));
-            }
-
-            return _plugin;
-        }
-    }
-
-    public static void Load()
-    {
-        _ = Plugin;
+        _plugin = plugin ?? throw new ArgumentNullException(nameof(plugin));
         if (Localization.instance != null)
         {
             LoadLocalization(Localization.instance, Localization.instance.GetSelectedLanguage());
         }
     }
 
-    public static void LoadLocalizationLater()
+    private static void LoadLocalizationLater()
     {
         if (Localization.instance != null)
         {
@@ -62,27 +36,23 @@ public class Localizer
         }
     }
 
-    private static void LoadLocalization(Localization localization, string language)
+    private static void LoadLocalization(Localization __instance, string language)
     {
-        if (!LocalizationLanguage.Remove(localization))
-        {
-            LocalizationObjects.Add(new WeakReference<Localization>(localization));
-        }
-
-        LocalizationLanguage.Add(localization, language);
-
+        Localization localization = __instance;
         Dictionary<string, string> localizationFiles = FindLocalizationFiles();
         if (LoadTranslationFromAssembly("English") is not { } englishAssemblyData)
         {
-            throw new Exception($"Found no English localizations in mod {Plugin.Info.Metadata.Name}. Expected an embedded resource translations/English.json or translations/English.yml.");
+            Debug.LogWarning($"Found no English localizations in mod {Plugin.Info.Metadata.Name}. Expected an embedded resource translations/English.json or translations/English.yml.");
+            return;
         }
 
-        Dictionary<string, string> localizationTexts =
-            new DeserializerBuilder().IgnoreFields().Build().Deserialize<Dictionary<string, string>?>(
-                Encoding.UTF8.GetString(englishAssemblyData)) ?? new Dictionary<string, string>();
+        Dictionary<string, string> localizationTexts = DeserializeLocalizationText(
+            Encoding.UTF8.GetString(englishAssemblyData),
+            "embedded English localization");
         if (localizationTexts.Count == 0)
         {
-            throw new Exception($"Localization for mod {Plugin.Info.Metadata.Name} failed: Localization file was empty.");
+            Debug.LogWarning($"Localization for mod {Plugin.Info.Metadata.Name} failed: English localization file was empty or invalid.");
+            return;
         }
 
         string? localizationData = null;
@@ -105,17 +75,30 @@ public class Localizer
 
         if (localizationData != null)
         {
-            foreach (KeyValuePair<string, string> kv in new DeserializerBuilder().IgnoreFields().Build()
-                         .Deserialize<Dictionary<string, string>?>(localizationData) ?? new Dictionary<string, string>())
+            foreach (KeyValuePair<string, string> kv in DeserializeLocalizationText(localizationData, $"{language} localization"))
             {
                 localizationTexts[kv.Key] = kv.Value;
             }
         }
 
-        LoadedTexts[language] = localizationTexts;
-        foreach (string key in localizationTexts.Keys)
+        foreach (KeyValuePair<string, string> text in localizationTexts)
         {
-            UpdateText(localization, key);
+            localization.AddWord(text.Key, text.Value);
+        }
+    }
+
+    private static Dictionary<string, string> DeserializeLocalizationText(string localizationData, string sourceDescription)
+    {
+        try
+        {
+            return new DeserializerBuilder().IgnoreFields().Build()
+                       .Deserialize<Dictionary<string, string>?>(localizationData) ??
+                   new Dictionary<string, string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Failed to parse {sourceDescription} for mod {Plugin.Info.Metadata.Name}: {e.Message}");
+            return new Dictionary<string, string>();
         }
     }
 
@@ -150,16 +133,6 @@ public class Localizer
         }
 
         return localizationFiles;
-    }
-
-    private static void UpdateText(Localization localization, string key)
-    {
-        LocalizationLanguage.TryGetValue(localization, out string language);
-        if (LoadedTexts.TryGetValue(language, out Dictionary<string, string>? texts) &&
-            texts.TryGetValue(key, out string text))
-        {
-            localization.AddWord(key, text);
-        }
     }
 
     static Localizer()
@@ -198,9 +171,4 @@ public class Localizer
 
         return stream.Length == 0 ? null : stream.ToArray();
     }
-}
-
-public static class LocalizationManagerVersion
-{
-    public const string Version = "1.4.0";
 }

@@ -86,11 +86,6 @@ internal static class JewelcraftingThrowableCompat
             }
 
             RemovePrefabBlacklistEntry(item);
-            if (WarfareThrowableCompat.DebugLoggingEnabled)
-            {
-                WarfareThrowableCompat.LogDebug(
-                    $"Jewelcrafting pre-normalized Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
-            }
         }
     }
 
@@ -108,16 +103,11 @@ internal static class JewelcraftingThrowableCompat
 
         RemovePrefabBlacklistEntry(item);
         __result = true;
-        if (WarfareThrowableCompat.DebugLoggingEnabled)
-        {
-            WarfareThrowableCompat.LogDebug(
-                $"Jewelcrafting socketability allowed for Warfare throwable prefab={GetItemPrefabName(item)} shared={item.m_shared?.m_name}");
-        }
     }
 
     private static bool IsUserSocketBlacklisted(ItemDrop.ItemData item)
     {
-        string prefabName = GetItemPrefabName(item);
+        string prefabName = WarfareThrowableCompat.GetItemPrefabName(item);
         if (string.IsNullOrWhiteSpace(prefabName))
         {
             return false;
@@ -140,7 +130,7 @@ internal static class JewelcraftingThrowableCompat
 
     private static void RemovePrefabBlacklistEntry(ItemDrop.ItemData item)
     {
-        string prefabName = GetItemPrefabName(item);
+        string prefabName = WarfareThrowableCompat.GetItemPrefabName(item);
         if (string.IsNullOrWhiteSpace(prefabName) ||
             _prefabBlacklistField?.GetValue(null) is not ICollection<string> prefabBlacklist ||
             !prefabBlacklist.Contains(prefabName))
@@ -198,17 +188,4 @@ internal static class JewelcraftingThrowableCompat
             $"Jewelcrafting Warfare throwable compatibility skipped: {message}");
     }
 
-    private static string GetItemPrefabName(ItemDrop.ItemData item)
-    {
-        const string cloneSuffix = "(Clone)";
-        if (item.m_dropPrefab == null)
-        {
-            return string.Empty;
-        }
-
-        string prefabName = item.m_dropPrefab.name;
-        return prefabName.EndsWith(cloneSuffix, StringComparison.Ordinal)
-            ? prefabName.Substring(0, prefabName.Length - cloneSuffix.Length)
-            : prefabName;
-    }
 }

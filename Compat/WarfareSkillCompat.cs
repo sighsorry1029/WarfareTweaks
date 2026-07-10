@@ -10,37 +10,20 @@ internal static class WarfareSkillCompat
 {
     private const string WarfareFireProjectileBurstPatchTypeName =
         "Warfare.WeaponSkillPatch+Attack_FireProjectileBurst_Patch";
-    private const string WarfareGuid = "Therzie.Warfare";
-
     private const string WarfareThrowingStaminaPatchTypeName =
         "Warfare.WeaponSkillPatch+Attack_FireProjectileBurst_Patch+Attack_GetAttackStamina_Patch_Throwing";
 
     private const string WarfareScythesStaminaPatchTypeName =
         "Warfare.WeaponSkillPatch+Attack_FireProjectileBurst_Patch+Attack_GetAttackStamina_Patch_Scythes";
 
-    private const string WarfarePrefabSuffix = "_TW";
     private const string ThrowingSkillName = "Throwing";
     private const string ScythesSkillName = "Scythes";
-    private const string ThrowableWeaponPrefix = "ThrowAxe";
-    private const string ThrowableProjectileSuffix = "_projectile_TW";
 
     private static readonly Skills.SkillType ThrowingSkillType =
         (Skills.SkillType)Math.Abs(ThrowingSkillName.GetStableHashCode());
 
     private static readonly Skills.SkillType ScythesSkillType =
         (Skills.SkillType)Math.Abs(ScythesSkillName.GetStableHashCode());
-
-    private static readonly HashSet<string> ThrowableSharedNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "$throw_axe_flint_TW",
-        "$throw_axe_bronze_TW",
-        "$throw_axe_iron_TW",
-        "$throw_axe_silver_TW",
-        "$throw_axe_blackmetal_TW",
-        "$throw_axe_dvergr_TW",
-        "$throw_axe_njord_TW",
-        "$throw_axe_surtr_TW"
-    };
 
     private static readonly Dictionary<string, Skills.SkillType> ExplicitSkillOverrides =
         new(StringComparer.OrdinalIgnoreCase)
@@ -83,16 +66,8 @@ internal static class WarfareSkillCompat
             patchedCount++;
         }
 
-        int unpatchedStaminaPostfixes = UnpatchWarfareStaminaPostfixes(harmony);
-        if (unpatchedStaminaPostfixes > 0)
-        {
-            patchedCount += unpatchedStaminaPostfixes;
-        }
-        else
-        {
-            patchedCount += TrySuppressWarfareStaminaPostfix(harmony, throwingStaminaPatchType);
-            patchedCount += TrySuppressWarfareStaminaPostfix(harmony, scythesStaminaPatchType);
-        }
+        patchedCount += TrySuppressWarfareStaminaPostfix(harmony, throwingStaminaPatchType);
+        patchedCount += TrySuppressWarfareStaminaPostfix(harmony, scythesStaminaPatchType);
 
         if (patchedCount <= 0)
         {
@@ -120,8 +95,10 @@ internal static class WarfareSkillCompat
             }
 
             ItemDrop? itemDrop = itemPrefab.GetComponent<ItemDrop>();
-            ItemDrop.ItemData.SharedData? sharedData = itemDrop?.m_itemData?.m_shared;
-            if (sharedData == null || !TryResolveVanillaSkill(itemPrefab, sharedData, out Skills.SkillType skillType))
+            ItemDrop.ItemData? item = itemDrop?.m_itemData;
+            ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
+            if (sharedData == null ||
+                !TryResolveVanillaSkill(itemPrefab, item!, out Skills.SkillType skillType))
             {
                 continue;
             }
@@ -131,14 +108,8 @@ internal static class WarfareSkillCompat
                 continue;
             }
 
-            Skills.SkillType previousSkillType = sharedData.m_skillType;
             sharedData.m_skillType = skillType;
             reassignedCount++;
-            if (WarfareThrowableCompat.DebugLoggingEnabled)
-            {
-                WarfareThrowableCompat.LogDebug(
-                    $"Reassigned Warfare skill prefab={GetPrefabName(itemPrefab)} shared={sharedData.m_name} {previousSkillType}->{skillType}");
-            }
         }
 
         if (reassignedCount > 0)
@@ -162,64 +133,23 @@ internal static class WarfareSkillCompat
         return 1;
     }
 
-    private static int UnpatchWarfareStaminaPostfixes(Harmony harmony)
-    {
-        MethodInfo? getAttackStamina = AccessTools.DeclaredMethod(typeof(Attack), "GetAttackStamina");
-        if (getAttackStamina == null)
-        {
-            return 0;
-        }
-
-        int postfixCount = CountWarfarePostfixes(getAttackStamina);
-        if (postfixCount <= 0)
-        {
-            return 0;
-        }
-
-        harmony.Unpatch(getAttackStamina, HarmonyPatchType.Postfix, WarfareGuid);
-        return postfixCount;
-    }
-
-    private static int CountWarfarePostfixes(MethodBase original)
-    {
-        Patches? patchInfo = Harmony.GetPatchInfo(original);
-        if (patchInfo == null)
-        {
-            return 0;
-        }
-
-        int count = 0;
-        foreach (Patch postfix in patchInfo.Postfixes)
-        {
-            if (postfix.owner == WarfareGuid)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
     private static bool ReplaceWarfareThrowingProjectileSkillPrefix(
         Attack a,
         HitData hit,
         ref float projVelocity,
         ref float projectileAccuracy)
     {
-        if (a?.m_character != Player.m_localPlayer || hit == null || !IsWarfareThrowableWeapon(a.m_weapon))
+        if (a?.m_character != Player.m_localPlayer ||
+            hit == null ||
+            !WarfareThrowableCompat.IsWarfareThrowableWeapon(a.m_weapon))
         {
-            return false;
+            return true;
         }
 
         hit.m_skill = Skills.SkillType.Axes;
         float skillFactor = Player.m_localPlayer.GetSkillFactor(Skills.SkillType.Axes);
         projVelocity *= 1f + skillFactor;
         projectileAccuracy *= 1f + skillFactor;
-        if (WarfareThrowableCompat.DebugLoggingEnabled)
-        {
-            WarfareThrowableCompat.LogDebug(
-                $"Replaced Warfare throwing projectile bonus with Axes factor={skillFactor} item={DescribeWeapon(a.m_weapon)}");
-        }
 
         return false;
     }
@@ -231,11 +161,11 @@ internal static class WarfareSkillCompat
 
     private static bool TryResolveVanillaSkill(
         GameObject itemPrefab,
-        ItemDrop.ItemData.SharedData sharedData,
+        ItemDrop.ItemData item,
         out Skills.SkillType skillType)
     {
-        string prefabName = GetPrefabName(itemPrefab);
-        if (IsWarfareThrowableWeaponPrefabName(prefabName) || ThrowableSharedNames.Contains(sharedData.m_name))
+        string prefabName = WarfareThrowableCompat.GetPrefabName(itemPrefab);
+        if (WarfareThrowableCompat.IsWarfareThrowableWeapon(item))
         {
             skillType = Skills.SkillType.Axes;
             return true;
@@ -248,40 +178,6 @@ internal static class WarfareSkillCompat
 
         skillType = Skills.SkillType.None;
         return false;
-    }
-
-    private static bool IsWarfareThrowableWeapon(ItemDrop.ItemData? item)
-    {
-        ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
-        if (sharedData == null)
-        {
-            return false;
-        }
-
-        string prefabName = GetItemPrefabName(item);
-        return IsWarfareThrowableWeaponPrefabName(prefabName) ||
-               ThrowableSharedNames.Contains(sharedData.m_name) ||
-               UsesWarfareThrowableProjectile(sharedData.m_attack) ||
-               UsesWarfareThrowableProjectile(sharedData.m_secondaryAttack);
-    }
-
-    private static bool UsesWarfareThrowableProjectile(Attack? attack)
-    {
-        return attack?.m_attackProjectile != null &&
-               IsWarfareThrowableProjectilePrefabName(GetPrefabName(attack.m_attackProjectile));
-    }
-
-    private static bool IsWarfareThrowableWeaponPrefabName(string prefabName)
-    {
-        return prefabName.StartsWith(ThrowableWeaponPrefix, StringComparison.OrdinalIgnoreCase) &&
-               prefabName.EndsWith(WarfarePrefabSuffix, StringComparison.OrdinalIgnoreCase) &&
-               !prefabName.EndsWith(ThrowableProjectileSuffix, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsWarfareThrowableProjectilePrefabName(string prefabName)
-    {
-        return prefabName.StartsWith(ThrowableWeaponPrefix, StringComparison.OrdinalIgnoreCase) &&
-               prefabName.EndsWith(ThrowableProjectileSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static Type? FindLoadedType(string fullTypeName)
@@ -308,28 +204,6 @@ internal static class WarfareSkillCompat
         }
 
         return null;
-    }
-
-    private static string GetItemPrefabName(ItemDrop.ItemData? item)
-    {
-        return item?.m_dropPrefab != null ? GetPrefabName(item.m_dropPrefab) : string.Empty;
-    }
-
-    private static string GetPrefabName(GameObject prefab)
-    {
-        const string cloneSuffix = "(Clone)";
-        string prefabName = prefab.name;
-        return prefabName.EndsWith(cloneSuffix, StringComparison.Ordinal)
-            ? prefabName.Substring(0, prefabName.Length - cloneSuffix.Length)
-            : prefabName;
-    }
-
-    private static string DescribeWeapon(ItemDrop.ItemData? item)
-    {
-        ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
-        return sharedData == null
-            ? "<null>"
-            : $"{GetItemPrefabName(item)} shared={sharedData.m_name} skill={sharedData.m_skillType}";
     }
 
     internal static bool IsHiddenWarfareSkill(Skills.SkillType skillType)

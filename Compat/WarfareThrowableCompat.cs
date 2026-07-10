@@ -28,8 +28,6 @@ internal static class WarfareThrowableCompat
     private static readonly Dictionary<string, GameObject> DropPrefabsBySharedName = new(StringComparer.OrdinalIgnoreCase);
     private static ObjectDB? _cachedRecipeObjectDb;
     private static ObjectDB? _cachedDropPrefabObjectDb;
-    private static int _cachedRecipeCount = -1;
-    private static int _cachedDropPrefabItemCount = -1;
     private static readonly Dictionary<string, string[]> UpgradeTemplatePrefabsByThrowable =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -46,16 +44,6 @@ internal static class WarfareThrowableCompat
     [ThreadStatic]
     private static int InventoryRemovalPreservationDepth;
 
-    internal static bool DebugLoggingEnabled
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => false;
-    }
-
-    internal static void LogDebug(string message)
-    {
-    }
-
     // ObjectDB/ZNetScene patching keeps prefab and recipe normalization together.
     internal static void ApplyToObjectDb(ObjectDB objectDb)
     {
@@ -63,6 +51,9 @@ internal static class WarfareThrowableCompat
         {
             return;
         }
+
+        _cachedRecipeObjectDb = null;
+        _cachedDropPrefabObjectDb = null;
 
         HashSet<string> patchedSharedNames = new(StringComparer.OrdinalIgnoreCase);
         int weaponCount = 0;
@@ -76,29 +67,12 @@ internal static class WarfareThrowableCompat
 
             ItemDrop? itemDrop = itemPrefab.GetComponent<ItemDrop>();
             ItemDrop.ItemData.SharedData? sharedData = itemDrop?.m_itemData?.m_shared;
-            bool looksLikeThrowable = LooksLikeWarfareThrowablePrefab(itemPrefab, sharedData);
-            if (looksLikeThrowable && DebugLoggingEnabled)
-            {
-                LogDebug(
-                    $"ObjectDB candidate prefab={GetPrefabName(itemPrefab)} recognized={IsWarfareThrowableWeaponPrefab(itemPrefab, sharedData)} item={DescribeItem(itemDrop?.m_itemData)} primary={DescribeAttack(sharedData?.m_attack)} secondary={DescribeAttack(sharedData?.m_secondaryAttack)}");
-            }
-
             if (!IsWarfareThrowableWeaponPrefab(itemPrefab, sharedData))
             {
                 continue;
             }
 
-            if (DebugLoggingEnabled)
-            {
-                LogDebug($"ObjectDB patch before prefab={GetPrefabName(itemPrefab)} item={DescribeItem(itemDrop?.m_itemData)}");
-            }
-
             PatchThrowableWeapon(itemDrop!, itemPrefab, out int weaponProjectileCount);
-            if (DebugLoggingEnabled)
-            {
-                LogDebug($"ObjectDB patch after prefab={GetPrefabName(itemPrefab)} item={DescribeItem(itemDrop?.m_itemData)} primary={DescribeAttack(sharedData?.m_attack)} secondary={DescribeAttack(sharedData?.m_secondaryAttack)}");
-            }
-
             weaponCount++;
             projectileCount += weaponProjectileCount;
             patchedSharedNames.Add(sharedData!.m_name);
@@ -150,18 +124,13 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"PrepareProjectileIfNeeded projectile={DescribeProjectile(projectile)}");
-        }
-
         ConfigureProjectileToVanish(projectile);
     }
 
-    internal static void ApplyProjectileToolTierIfNeeded(HitData? hit, string source)
+    internal static void ApplyProjectileToolTierIfNeeded(HitData? hit)
     {
         if (hit == null ||
-            !WarfareTweaksRuntimeContext.TryPeekProjectileHitContext(out ProjectileHitContext context) ||
+            !WarfareTweaksProjectileHitContext.TryPeek(out ProjectileHitContext context) ||
             context.Projectile == null ||
             !IsWarfareThrowableProjectile(context.Projectile))
         {
@@ -174,20 +143,14 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        short previousToolTier = hit.m_toolTier;
         hit.m_toolTier = toolTier;
-        if (DebugLoggingEnabled)
-        {
-            LogDebug(
-                $"{source} restored projectile toolTier {previousToolTier}->{hit.m_toolTier} projectile={DescribeProjectile(context.Projectile)}");
-        }
     }
 
-    internal static void ApplyProjectileWoodCuttingSkillIfNeeded(HitData? hit, string source)
+    internal static void ApplyProjectileWoodCuttingSkillIfNeeded(HitData? hit)
     {
         if (hit == null ||
             hit.m_damage.m_chop <= 0f ||
-            !WarfareTweaksRuntimeContext.TryPeekProjectileHitContext(out ProjectileHitContext context) ||
+            !WarfareTweaksProjectileHitContext.TryPeek(out ProjectileHitContext context) ||
             context.Projectile == null ||
             !IsWarfareThrowableProjectile(context.Projectile))
         {
@@ -200,42 +163,19 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        Skills.SkillType previousSkill = hit.m_skill;
         hit.m_skill = Skills.SkillType.WoodCutting;
         hit.m_skillLevel = attacker.GetSkillLevel(Skills.SkillType.WoodCutting);
         attacker.RaiseSkill(Skills.SkillType.WoodCutting, hit.m_skillRaiseAmount);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug(
-                $"{source} routed throwable chop hit skill {previousSkill}->{hit.m_skill} and raised WoodCutting by {hit.m_skillRaiseAmount} projectile={DescribeProjectile(context.Projectile)}");
-        }
     }
 
     internal static void PrepareWeaponForUse(ItemDrop.ItemData? weapon)
     {
         if (!IsWarfareThrowableWeapon(weapon))
         {
-            if (LooksLikeWarfareThrowableItem(weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"PrepareWeaponForUse skipped unrecognized item={DescribeItem(weapon)}");
-                }
-            }
-
             return;
         }
 
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"PrepareWeaponForUse before item={DescribeItem(weapon)}");
-        }
-
         ConfigureWeaponDurability(weapon!);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"PrepareWeaponForUse after item={DescribeItem(weapon)}");
-        }
     }
 
     internal static bool TryPrepareJewelcraftingSocketableWeapon(ItemDrop.ItemData? weapon)
@@ -261,47 +201,30 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        int preparedRecipeCount = 0;
         if (recipes != null)
         {
             foreach (Recipe recipe in recipes)
             {
-                if (TryPrepareThrowableUpgradeRecipe(objectDb, recipe))
-                {
-                    preparedRecipeCount++;
-                }
+                TryPrepareThrowableUpgradeRecipe(objectDb, recipe);
             }
         }
 
-        int preparedInventoryCount = 0;
         Inventory? inventory = Player.m_localPlayer?.GetInventory();
         if (inventory != null)
         {
             foreach (ItemDrop.ItemData item in inventory.m_inventory)
             {
-                if (TryPrepareThrowableUpgradeItem(objectDb, item))
-                {
-                    preparedInventoryCount++;
-                }
+                TryPrepareThrowableUpgradeItem(objectDb, item);
             }
 
             if (includeMissingInventoryRecipes && recipes != null)
             {
-                preparedRecipeCount += AddMissingInventoryThrowableRecipes(objectDb, inventory, recipes);
-            }
-        }
-
-        if (preparedRecipeCount > 0 || preparedInventoryCount > 0)
-        {
-            if (DebugLoggingEnabled)
-            {
-                LogDebug(
-                    $"Prepared Warfare throwable upgrade data for recipes={preparedRecipeCount} inventoryItems={preparedInventoryCount}");
+                AddMissingInventoryThrowableRecipes(objectDb, inventory, recipes);
             }
         }
     }
 
-    private static int AddMissingInventoryThrowableRecipes(
+    private static void AddMissingInventoryThrowableRecipes(
         ObjectDB objectDb,
         Inventory inventory,
         List<Recipe> recipes)
@@ -317,7 +240,6 @@ internal static class WarfareThrowableCompat
             }
         }
 
-        int addedCount = 0;
         foreach (ItemDrop.ItemData item in inventory.m_inventory)
         {
             ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
@@ -346,15 +268,7 @@ internal static class WarfareThrowableCompat
 
             recipes.Add(recipe);
             listedSharedNames.Add(sharedData.m_name);
-            addedCount++;
-            if (DebugLoggingEnabled)
-            {
-                LogDebug(
-                    $"Added missing Warfare throwable upgrade recipe prefab={prefabName} shared={sharedData.m_name}");
-            }
         }
-
-        return addedCount;
     }
 
     // Attack and inventory guards preserve throwable durability semantics.
@@ -362,20 +276,7 @@ internal static class WarfareThrowableCompat
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            if (LooksLikeWarfareThrowableItem(attack?.m_weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"PrepareAttackForUse skipped unrecognized attack={DescribeAttack(attack)} item={DescribeItem(attack?.m_weapon)}");
-                }
-            }
-
             return;
-        }
-
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"PrepareAttackForUse before attack={DescribeAttack(attack)} item={DescribeItem(attack.m_weapon)} ammo={DescribeItem(attack.m_ammoItem)} lastAmmo={DescribeItem(attack.m_lastUsedAmmo)}");
         }
 
         ConfigureWeaponDurability(attack.m_weapon);
@@ -393,33 +294,16 @@ internal static class WarfareThrowableCompat
             PatchProjectilePrefab(attack.m_attackProjectile);
         }
 
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"PrepareAttackForUse after attack={DescribeAttack(attack)} item={DescribeItem(attack.m_weapon)}");
-        }
     }
 
     internal static bool ShouldPreserveWeaponOnConsume(Attack? attack)
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            if (LooksLikeWarfareThrowableItem(attack?.m_weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"Attack.ConsumeItem not blocked: item was not recognized. attack={DescribeAttack(attack)} item={DescribeItem(attack?.m_weapon)}");
-                }
-            }
-
             return false;
         }
 
         PrepareAttackForUse(attack);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Attack.ConsumeItem blocked for item={DescribeItem(attack.m_weapon)}");
-        }
-
         return true;
     }
 
@@ -427,23 +311,10 @@ internal static class WarfareThrowableCompat
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            if (LooksLikeWarfareThrowableItem(attack?.m_weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"Attack.UseAmmo not skipped: item was not recognized. attack={DescribeAttack(attack)} item={DescribeItem(attack?.m_weapon)} ammo={DescribeItem(attack?.m_ammoItem)}");
-                }
-            }
-
             return false;
         }
 
         PrepareAttackForUse(attack);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Attack.UseAmmo skipped for item={DescribeItem(attack.m_weapon)}");
-        }
-
         return true;
     }
 
@@ -451,24 +322,11 @@ internal static class WarfareThrowableCompat
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            if (LooksLikeWarfareThrowableItem(attack?.m_weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"Inventory preservation not started: item was not recognized. attack={DescribeAttack(attack)} item={DescribeItem(attack?.m_weapon)}");
-                }
-            }
-
             return false;
         }
 
         PrepareAttackForUse(attack);
         InventoryRemovalPreservationDepth++;
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Inventory preservation started depth={InventoryRemovalPreservationDepth} attack={DescribeAttack(attack)} item={DescribeItem(attack.m_weapon)}");
-        }
-
         return true;
     }
 
@@ -480,30 +338,16 @@ internal static class WarfareThrowableCompat
         }
 
         InventoryRemovalPreservationDepth--;
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Inventory preservation ended depth={InventoryRemovalPreservationDepth}");
-        }
     }
 
-    internal static bool ShouldBlockInventoryRemoval(ItemDrop.ItemData? item, string source, int amount = -1)
+    internal static bool ShouldBlockInventoryRemoval(
+        ItemDrop.ItemData? item,
+        bool allowBrokenUnequip = false)
     {
         bool recognized = IsWarfareThrowableWeapon(item);
-        bool looksLikeThrowable = LooksLikeWarfareThrowableItem(item);
-        if ((recognized || looksLikeThrowable) && DebugLoggingEnabled)
+        bool preserveBrokenRemoval = recognized && ShouldPreserveBrokenRemoval(item);
+        if (preserveBrokenRemoval && allowBrokenUnequip)
         {
-            LogDebug(
-                $"{source} observed amount={amount} preserveDepth={InventoryRemovalPreservationDepth} recognized={recognized} item={DescribeItem(item)}");
-        }
-
-        bool preserveBrokenRemoval = recognized && ShouldPreserveBrokenRemoval(item, source);
-        if (preserveBrokenRemoval && source.StartsWith("Humanoid.UnequipItem", StringComparison.Ordinal))
-        {
-            if (DebugLoggingEnabled)
-            {
-                LogDebug($"{source} allowed broken item unequip for item={DescribeItem(item)}");
-            }
-
             return false;
         }
 
@@ -513,57 +357,23 @@ internal static class WarfareThrowableCompat
         }
 
         ConfigureWeaponDurability(item!);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"{source} blocked item removal for item={DescribeItem(item)}");
-        }
-
         return true;
     }
 
-    internal static bool ShouldBlockNamedInventoryRemoval(string source, string name, int amount)
+    internal static bool ShouldBlockNamedInventoryRemoval(string name)
     {
-        bool looksLikeThrowable = LooksLikeWarfareThrowableName(name);
-        if (looksLikeThrowable && DebugLoggingEnabled)
-        {
-            LogDebug($"{source} observed amount={amount} preserveDepth={InventoryRemovalPreservationDepth} name={name}");
-        }
-
-        if (InventoryRemovalPreservationDepth <= 0 || !looksLikeThrowable)
-        {
-            return false;
-        }
-
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"{source} blocked named item removal name={name} amount={amount}");
-        }
-
-        return true;
+        return InventoryRemovalPreservationDepth > 0 && LooksLikeWarfareThrowableName(name);
     }
 
     internal static ProjectileDurabilityDrainState CaptureProjectileDurabilityDrain(Attack attack)
     {
         if (attack?.m_character is not Player || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            if (LooksLikeWarfareThrowableItem(attack?.m_weapon))
-            {
-                if (DebugLoggingEnabled)
-                {
-                    LogDebug($"Projectile durability capture skipped. attack={DescribeAttack(attack)} item={DescribeItem(attack?.m_weapon)}");
-                }
-            }
-
             return ProjectileDurabilityDrainState.Empty;
         }
 
         PrepareAttackForUse(attack);
         ItemDrop.ItemData weapon = attack.m_weapon;
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Projectile durability capture before={weapon.m_durability} drain={GetDurabilityDrain(weapon)} item={DescribeItem(weapon)}");
-        }
-
         return new ProjectileDurabilityDrainState(weapon, weapon.m_durability);
     }
 
@@ -577,21 +387,12 @@ internal static class WarfareThrowableCompat
         ItemDrop.ItemData weapon = state.Weapon;
         if (weapon.m_durability < state.BeforeDurability - 0.001f)
         {
-            if (DebugLoggingEnabled)
-            {
-                LogDebug($"Projectile durability already drained before={state.BeforeDurability} after={weapon.m_durability} item={DescribeItem(weapon)}");
-            }
-
             MarkBrokenRemovalPreservationIfNeeded(weapon);
             return;
         }
 
         weapon.m_durability = Mathf.Max(0f, weapon.m_durability - GetDurabilityDrain(weapon));
         MarkBrokenRemovalPreservationIfNeeded(weapon);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Projectile durability manually drained before={state.BeforeDurability} after={weapon.m_durability} item={DescribeItem(weapon)}");
-        }
     }
 
     // Prefab mutation helpers are shared by ObjectDB setup and runtime attack repair.
@@ -722,12 +523,6 @@ internal static class WarfareThrowableCompat
         if (!recipeHasUpgradeCosts)
         {
             recipeHasUpgradeCosts = EnsureFallbackUpgradeRequirements(throwableRecipe);
-        }
-
-        if (DebugLoggingEnabled)
-        {
-            LogDebug(
-                $"Applied upgrade template to throwable prefab={throwablePrefabName} maxQuality={throwableShared.m_maxQuality} damagesPerLevel={DescribeDamage(throwableShared.m_damagesPerLevel)} durabilityPerLevel={throwableShared.m_durabilityPerLevel}");
         }
 
         return throwableShared.m_maxQuality > 1 && recipeHasUpgradeCosts;
@@ -964,16 +759,13 @@ internal static class WarfareThrowableCompat
 
     private static void EnsureRecipeLookup(ObjectDB objectDb)
     {
-        int recipeCount = objectDb.m_recipes?.Count ?? 0;
-        if (ReferenceEquals(_cachedRecipeObjectDb, objectDb) &&
-            _cachedRecipeCount == recipeCount)
+        if (ReferenceEquals(_cachedRecipeObjectDb, objectDb))
         {
             return;
         }
 
         RecipesByPrefabOrSharedName.Clear();
         _cachedRecipeObjectDb = objectDb;
-        _cachedRecipeCount = recipeCount;
         if (objectDb.m_recipes == null)
         {
             return;
@@ -1169,25 +961,17 @@ internal static class WarfareThrowableCompat
         weapon.m_dropPrefab = itemPrefab;
         PatchedWeaponPrefabNames.Add(GetPrefabName(itemPrefab));
         PatchedWeaponSharedNames.Add(weapon.m_shared.m_name);
-        if (DebugLoggingEnabled)
-        {
-            LogDebug(
-                $"Restored missing drop prefab for Warfare throwable prefab={GetPrefabName(itemPrefab)} shared={weapon.m_shared.m_name}");
-        }
     }
 
     private static void EnsureDropPrefabLookup(ObjectDB objectDb)
     {
-        int itemCount = objectDb.m_items?.Count ?? 0;
-        if (ReferenceEquals(_cachedDropPrefabObjectDb, objectDb) &&
-            _cachedDropPrefabItemCount == itemCount)
+        if (ReferenceEquals(_cachedDropPrefabObjectDb, objectDb))
         {
             return;
         }
 
         DropPrefabsBySharedName.Clear();
         _cachedDropPrefabObjectDb = objectDb;
-        _cachedDropPrefabItemCount = itemCount;
         if (objectDb.m_items == null)
         {
             return;
@@ -1226,13 +1010,9 @@ internal static class WarfareThrowableCompat
         float expiresAt = Time.time + BrokenRemovalPreservationSeconds;
         BrokenRemovalPreservations.Remove(weapon);
         BrokenRemovalPreservations.Add(weapon, new BrokenRemovalPreservationState(expiresAt));
-        if (DebugLoggingEnabled)
-        {
-            LogDebug($"Broken item removal preservation armed until={expiresAt} item={DescribeItem(weapon)}");
-        }
     }
 
-    private static bool ShouldPreserveBrokenRemoval(ItemDrop.ItemData? item, string source)
+    private static bool ShouldPreserveBrokenRemoval(ItemDrop.ItemData? item)
     {
         if (item == null)
         {
@@ -1253,11 +1033,6 @@ internal static class WarfareThrowableCompat
         if (Time.time > state.ExpiresAt)
         {
             BrokenRemovalPreservations.Remove(item);
-            if (DebugLoggingEnabled)
-            {
-                LogDebug($"Broken item removal preservation expired source={source} item={DescribeItem(item)}");
-            }
-
             return false;
         }
 
@@ -1300,7 +1075,7 @@ internal static class WarfareThrowableCompat
         return toolTier;
     }
 
-    private static bool IsWarfareThrowableWeapon(ItemDrop.ItemData? item)
+    internal static bool IsWarfareThrowableWeapon(ItemDrop.ItemData? item)
     {
         ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
         if (sharedData == null)
@@ -1405,7 +1180,7 @@ internal static class WarfareThrowableCompat
         return prefabName.EndsWith(WarfarePrefabSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string GetPrefabName(GameObject prefab)
+    internal static string GetPrefabName(GameObject prefab)
     {
         const string cloneSuffix = "(Clone)";
         string prefabName = prefab.name;
@@ -1414,17 +1189,9 @@ internal static class WarfareThrowableCompat
             : prefabName;
     }
 
-    private static string GetItemPrefabName(ItemDrop.ItemData? item)
+    internal static string GetItemPrefabName(ItemDrop.ItemData? item)
     {
         return item?.m_dropPrefab != null ? GetPrefabName(item.m_dropPrefab) : string.Empty;
-    }
-
-    private static bool LooksLikeWarfareThrowablePrefab(GameObject itemPrefab, ItemDrop.ItemData.SharedData? sharedData)
-    {
-        string prefabName = GetPrefabName(itemPrefab);
-        return LooksLikeWarfareThrowableName(prefabName) ||
-               LooksLikeWarfareThrowableName(sharedData?.m_name) ||
-               (sharedData != null && HasThrowingSkill(sharedData) && HasProjectileAttack(sharedData));
     }
 
     private static bool LooksLikeWarfareThrowableItem(ItemDrop.ItemData? item)
@@ -1453,113 +1220,6 @@ internal static class WarfareThrowableCompat
 
         return name.IndexOf(ThrowableWeaponPrefix, StringComparison.OrdinalIgnoreCase) >= 0 ||
                name.IndexOf(ThrowableSharedNameToken, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    // Debug formatters stay at the bottom so runtime logic does not interleave with logging details.
-    private static string DescribeItem(ItemDrop.ItemData? item)
-    {
-        if (item?.m_shared == null)
-        {
-            return "<null>";
-        }
-
-        ItemDrop.ItemData.SharedData sharedData = item.m_shared;
-        string initialized = item.m_customData != null && item.m_customData.ContainsKey(DurabilityInitializedKey)
-            ? "yes"
-            : "no";
-        return "{"
-               + $"prefab={GetItemPrefabName(item)}"
-               + $", shared={sharedData.m_name}"
-               + $", type={sharedData.m_itemType}"
-               + $", skill={sharedData.m_skillType}({(int)sharedData.m_skillType})"
-               + $", toolTier={sharedData.m_toolTier}"
-               + $", stack={item.m_stack}/{sharedData.m_maxStackSize}"
-               + $", autoStack={sharedData.m_autoStack}"
-               + $", equipped={item.m_equipped}"
-               + $", ammoType={sharedData.m_ammoType}"
-               + $", useDurability={sharedData.m_useDurability}"
-               + $", durability={item.m_durability}/{sharedData.m_maxDurability}"
-               + $", drain={sharedData.m_useDurabilityDrain}"
-               + $", initialized={initialized}"
-               + "}";
-    }
-
-    private static string DescribeAttack(Attack? attack)
-    {
-        if (attack == null)
-        {
-            return "<null>";
-        }
-
-        return "{"
-               + $"type={attack.m_attackType}"
-               + $", animation={attack.m_attackAnimation}"
-               + $", projectile={GetObjectName(attack.m_attackProjectile)}"
-               + $", consumeItem={attack.m_consumeItem}"
-               + $", spawnOnHit={GetObjectName(attack.m_spawnOnHit)}"
-               + $", spawnOnHitChance={attack.m_spawnOnHitChance}"
-               + $", projectiles={attack.m_projectiles}"
-               + $", bursts={attack.m_projectileBursts}"
-               + $", perBurstResource={attack.m_perBurstResourceUsage}"
-               + "}";
-    }
-
-    private static string DescribeDamage(HitData.DamageTypes damage)
-    {
-        return "{"
-               + $"damage={damage.m_damage}"
-               + $", blunt={damage.m_blunt}"
-               + $", slash={damage.m_slash}"
-               + $", pierce={damage.m_pierce}"
-               + $", chop={damage.m_chop}"
-               + $", pickaxe={damage.m_pickaxe}"
-               + $", fire={damage.m_fire}"
-               + $", frost={damage.m_frost}"
-               + $", lightning={damage.m_lightning}"
-               + $", poison={damage.m_poison}"
-               + $", spirit={damage.m_spirit}"
-               + "}";
-    }
-
-    private static string DescribeProjectile(Projectile? projectile)
-    {
-        if (projectile == null)
-        {
-            return "<null>";
-        }
-
-        return "{"
-               + $"prefab={GetPrefabName(projectile.gameObject)}"
-               + $", weapon={DescribeItem(ProjectileAccess.GetWeapon(projectile))}"
-               + $", spawnItem={DescribeItem(projectile.m_spawnItem)}"
-               + $", respawnItemOnHit={projectile.m_respawnItemOnHit}"
-               + $", spawnOnHit={GetObjectName(projectile.m_spawnOnHit)}"
-               + $", spawnOnHitChance={projectile.m_spawnOnHitChance}"
-               + $", randomSpawnOnHit={DescribePrefabList(projectile.m_randomSpawnOnHit)}"
-               + $", aoe={projectile.m_aoe}"
-               + $", originalToolTier={ProjectileAccess.GetOriginalHitData(projectile)?.m_toolTier ?? 0}"
-               + "}";
-    }
-
-    private static string DescribePrefabList(List<GameObject> prefabs)
-    {
-        if (prefabs == null || prefabs.Count == 0)
-        {
-            return "[]";
-        }
-
-        List<string> names = new();
-        foreach (GameObject prefab in prefabs)
-        {
-            names.Add(GetObjectName(prefab));
-        }
-
-        return "[" + string.Join(",", names) + "]";
-    }
-
-    private static string GetObjectName(GameObject? prefab)
-    {
-        return prefab != null ? GetPrefabName(prefab) : "<null>";
     }
 
     private sealed class RecipeLookupEntry
