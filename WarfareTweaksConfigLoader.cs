@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Text;
 using YamlDotNet.RepresentationModel;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -11,6 +13,8 @@ namespace WarfareTweaks;
 
 internal static class WarfareTweaksConfigLoader
 {
+    private const string DefaultResourcePrefix = "WarfareTweaks.Resources.Defaults.";
+
     private static readonly HashSet<string> IgnoredLegacyEffectFields = new(StringComparer.OrdinalIgnoreCase)
     {
         "trigger",
@@ -80,8 +84,22 @@ internal static class WarfareTweaksConfigLoader
         {
             File.WriteAllText(
                 WarfareTweaksPlugin.WarfareYamlFilePath,
-                WarfareTweaksDefaultYamlResources.Load(WarfareTweaksPlugin.WarfareYamlFileName));
+                LoadEmbeddedDefault(WarfareTweaksPlugin.WarfareYamlFileName));
         }
+    }
+
+    internal static string LoadEmbeddedDefault(string fileName)
+    {
+        string resourceName = DefaultResourcePrefix + fileName;
+        Assembly assembly = typeof(WarfareTweaksConfigLoader).Assembly;
+        using Stream? stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null)
+        {
+            throw new InvalidOperationException($"Embedded default YAML resource '{resourceName}' was not found.");
+        }
+
+        using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     internal static bool TryParse(
@@ -207,11 +225,9 @@ internal static class WarfareTweaksConfigLoader
             }
 
             mapping.Children.Remove(entry.Key);
-            if (WarfareTweaksWarningLog.TryMarkReported($"ignored_yaml_field_{fieldName}"))
-            {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
-                    $"Ignoring unsupported {WarfareTweaksPlugin.WarfareYamlFileName} field '{fieldName}' in {location}; it has no WarfareTweaks behavior.");
-            }
+            WarfareTweaksWarningLog.LogOnce(
+                $"ignored_yaml_field_{fieldName}",
+                $"Ignoring unsupported {WarfareTweaksPlugin.WarfareYamlFileName} field '{fieldName}' in {location}; it has no WarfareTweaks behavior.");
         }
     }
 

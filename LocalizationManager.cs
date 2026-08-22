@@ -19,9 +19,17 @@ internal static class Localizer
     private static BaseUnityPlugin Plugin =>
         _plugin ?? throw new InvalidOperationException("Localization was used before the plugin was registered.");
 
-    internal static void Load(BaseUnityPlugin plugin)
+    internal static void Load(BaseUnityPlugin plugin, Harmony harmony)
     {
         _plugin = plugin ?? throw new ArgumentNullException(nameof(plugin));
+        harmony = harmony ?? throw new ArgumentNullException(nameof(harmony));
+        harmony.Patch(
+            AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage)),
+            postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalization))));
+        harmony.Patch(
+            AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.SetupGui)),
+            postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalizationLater))));
+
         if (Localization.instance != null)
         {
             LoadLocalization(Localization.instance, Localization.instance.GetSelectedLanguage());
@@ -133,17 +141,6 @@ internal static class Localizer
         }
 
         return localizationFiles;
-    }
-
-    static Localizer()
-    {
-        Harmony harmony = new("org.bepinex.helpers.LocalizationManager");
-        harmony.Patch(
-            AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage)),
-            postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalization))));
-        harmony.Patch(
-            AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.SetupGui)),
-            postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalizationLater))));
     }
 
     private static byte[]? LoadTranslationFromAssembly(string language)

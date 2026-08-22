@@ -16,6 +16,9 @@ internal static class ChainLightningDedupSystem
     [ThreadStatic]
     private static ChainLightningActivation? ActiveActivation;
 
+    [ThreadStatic]
+    private static int ActiveScopeDepth;
+
     internal static void RestoreVanillaChainLightningBehavior(ZNetScene scene)
     {
         GameObject? prefab = scene != null ? scene.GetPrefab("ChainLightning") : null;
@@ -55,19 +58,35 @@ internal static class ChainLightningDedupSystem
     internal static ChainUpdateScope BeginChainUpdate(Aoe aoe)
     {
         ChainLightningActivation? previous = ActiveActivation;
-        if (aoe != null)
+        ActiveScopeDepth++;
+        try
         {
-            if (TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+            if (aoe != null)
             {
-                ActiveActivation = EnsureActivation(state);
+                if (TryGetChainLightningState(aoe, out ChainLightningAoeState state))
+                {
+                    ActiveActivation = EnsureActivation(state);
+                }
             }
-        }
 
-        return new ChainUpdateScope(previous);
+            return new ChainUpdateScope(previous, ActiveScopeDepth);
+        }
+        catch
+        {
+            ActiveScopeDepth--;
+            ActiveActivation = previous;
+            throw;
+        }
     }
 
     internal static void EndChainUpdate(ChainUpdateScope scope)
     {
+        if (scope.Depth == 0 || ActiveScopeDepth != scope.Depth)
+        {
+            return;
+        }
+
+        ActiveScopeDepth--;
         ActiveActivation = scope.PreviousActivation;
     }
 
@@ -207,12 +226,15 @@ internal static class ChainLightningDedupSystem
 
     internal readonly struct ChainUpdateScope
     {
-        internal ChainUpdateScope(ChainLightningActivation? previousActivation)
+        internal ChainUpdateScope(ChainLightningActivation? previousActivation, int depth)
         {
             PreviousActivation = previousActivation;
+            Depth = depth;
         }
 
         internal ChainLightningActivation? PreviousActivation { get; }
+
+        internal int Depth { get; }
     }
 
     internal sealed class ChainLightningActivation
@@ -279,5 +301,12 @@ internal static class AoeCustomFixedUpdateChainLightningActivationPatch
     private static void Postfix(ChainLightningDedupSystem.ChainUpdateScope __state)
     {
         ChainLightningDedupSystem.EndChainUpdate(__state);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, ChainLightningDedupSystem.ChainUpdateScope __state)
+    {
+        ChainLightningDedupSystem.EndChainUpdate(__state);
+
+        return __exception;
     }
 }

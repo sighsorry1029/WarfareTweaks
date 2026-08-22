@@ -7,8 +7,11 @@ internal static class WarfareTweaksWarningLog
 {
     private static readonly HashSet<string> Reported = new(StringComparer.OrdinalIgnoreCase);
 
-    internal static bool TryMarkReported(string key)
+    internal static void LogOnce(string key, string message)
     {
-        return !string.IsNullOrWhiteSpace(key) && Reported.Add(key);
+        if (!string.IsNullOrWhiteSpace(key) && Reported.Add(key))
+        {
+            WarfareTweaksPlugin.ModLogger.LogWarning(message);
+        }
     }
 }

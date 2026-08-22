@@ -9,7 +9,7 @@ namespace WarfareTweaks;
 
 internal static partial class WarfareCompat
 {
-    private static readonly ConditionalWeakTable<ItemDrop.ItemData.SharedData, ItemPrefabNameCacheEntry> ItemPrefabNamesBySharedData = new();
+    private static readonly ConditionalWeakTable<ItemDrop.ItemData.SharedData, string> ItemPrefabNamesBySharedData = new();
     private static readonly Dictionary<string, List<ConfiguredWarfareEffectLookup>> ConfiguredTooltipEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
 
     internal static void AppendMissingConfiguredEffectTooltips(ItemDrop.ItemData item, ref string tooltip)
@@ -237,7 +237,7 @@ internal static partial class WarfareCompat
         prefabName = "";
         if (item?.m_dropPrefab != null)
         {
-            prefabName = NormalizePrefabName(item.m_dropPrefab.name);
+            prefabName = WarfareTweaksCompat.NormalizePrefabName(item.m_dropPrefab.name);
             CacheItemPrefabName(item.m_shared, prefabName);
             return !string.IsNullOrWhiteSpace(prefabName);
         }
@@ -247,9 +247,9 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        if (ItemPrefabNamesBySharedData.TryGetValue(item.m_shared, out ItemPrefabNameCacheEntry cachedEntry))
+        if (ItemPrefabNamesBySharedData.TryGetValue(item.m_shared, out string cachedPrefabName))
         {
-            prefabName = cachedEntry.PrefabName;
+            prefabName = cachedPrefabName;
             return !string.IsNullOrWhiteSpace(prefabName);
         }
 
@@ -263,7 +263,7 @@ internal static partial class WarfareCompat
             ItemDrop? prefabItem = prefab.GetComponent<ItemDrop>();
             if (prefabItem?.m_itemData?.m_shared == item.m_shared)
             {
-                prefabName = NormalizePrefabName(prefab.name);
+                prefabName = WarfareTweaksCompat.NormalizePrefabName(prefab.name);
                 CacheItemPrefabName(item.m_shared, prefabName);
                 return !string.IsNullOrWhiteSpace(prefabName);
             }
@@ -283,7 +283,7 @@ internal static partial class WarfareCompat
                 continue;
             }
 
-            prefabName = NormalizePrefabName(prefab.name);
+            prefabName = WarfareTweaksCompat.NormalizePrefabName(prefab.name);
             CacheItemPrefabName(item.m_shared, prefabName);
             return !string.IsNullOrWhiteSpace(prefabName);
         }
@@ -299,14 +299,7 @@ internal static partial class WarfareCompat
         }
 
         ItemPrefabNamesBySharedData.Remove(sharedData);
-        ItemPrefabNamesBySharedData.Add(sharedData, new ItemPrefabNameCacheEntry(prefabName));
-    }
-
-    private static string NormalizePrefabName(string prefabName)
-    {
-        return (prefabName ?? "")
-            .Replace("(Clone)", "", StringComparison.OrdinalIgnoreCase)
-            .Trim();
+        ItemPrefabNamesBySharedData.Add(sharedData, prefabName);
     }
 
     private static bool ShouldAppendFallbackTooltip(WarfareBuiltInEffectRegistration registration, string tooltip)
@@ -712,16 +705,4 @@ internal static partial class WarfareCompat
 
         effects.Add(lookup);
     }
-
-
-    private sealed class ItemPrefabNameCacheEntry
-    {
-        public ItemPrefabNameCacheEntry(string prefabName)
-        {
-            PrefabName = prefabName;
-        }
-
-        public string PrefabName { get; }
-    }
-
 }

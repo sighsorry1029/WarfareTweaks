@@ -94,8 +94,6 @@ internal static class WarfareItemManagerSyncCompat
                    parameters[3].ParameterType == typeof(ConfigDescription);
         });
 
-    private static bool _reportedTargetWarning;
-
     internal static void RegisterMissingRecipeConfigs()
     {
         try
@@ -387,11 +385,7 @@ internal static class WarfareItemManagerSyncCompat
 
     private static void LogTargetWarningOnce(string message)
     {
-        if (!_reportedTargetWarning)
-        {
-            _reportedTargetWarning = true;
-            WarfareTweaksPlugin.ModLogger.LogWarning(message);
-        }
+        WarfareTweaksWarningLog.LogOnce("warfare_item_manager_sync_compat_failure", message);
     }
 
     private static string ConfigKey(string section, string key)

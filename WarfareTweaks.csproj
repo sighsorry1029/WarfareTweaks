@@ -15,6 +15,7 @@
     <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
     <RuntimeIdentifiers>win</RuntimeIdentifiers>
+    <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -495,13 +496,13 @@
       <NexusPackageDir>$(ProjectDir)\Nexus\$(PackageName)</NexusPackageDir>
     </PropertyGroup>
   </Target>
-  <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion">
+  <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion" Condition="'$(DeployToGame)' == 'true'">
     <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')" />
   </Target>
-  <Target Name="CopyReadMeToTSFolder" AfterTargets="CopyOutputDLL" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
+  <Target Name="CopyReadMeToTSFolder" AfterTargets="GetAssemblyVersion" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
     <Error Text="README.md not found in project directory." Condition="!Exists('$(ProjectDir)README.md')" />
     <RemoveDir Directories="$(PackageDir)" Condition="Exists('$(PackageDir)')" />
     <MakeDir Directories="$(PackageDir)" />
@@ -555,7 +556,6 @@
     <Compile Include="WarfareTweaksCompat.cs" />
     <Compile Include="WarfareTweaksConfigLoader.cs" />
     <Compile Include="WarfareTweaksConfigModels.cs" />
-    <Compile Include="WarfareTweaksDefaultYamlResources.cs" />
     <Compile Include="WarfareTweaksHarmonyHooks.cs" />
     <Compile Include="WarfareTweaksPlugin.cs" />
     <Compile Include="WarfareTweaksProjectileHitContext.cs" />
@@ -563,6 +563,7 @@
     <Compile Include="Compat\JewelcraftingThrowableCompat.cs" />
     <Compile Include="Compat\WarfareCompat.cs" />
     <Compile Include="Compat\WarfareCompat.Tooltips.cs" />
+    <Compile Include="Compat\WarfareGreatbowSoundCompat.cs" />
     <Compile Include="Compat\WarfareItemManagerSyncCompat.cs" />
     <Compile Include="Compat\WarfareSkillCompat.cs" />
     <Compile Include="Compat\WarfareThrowableCompat.cs" />

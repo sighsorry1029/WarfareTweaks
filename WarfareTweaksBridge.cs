@@ -20,14 +20,36 @@ internal static class WarfareTweaksBridge
         get
         {
             EnsureResolved();
-            return _isGeneratedDamageActive?.Invoke() is true;
+            try
+            {
+                return _isGeneratedDamageActive?.Invoke() is true;
+            }
+            catch (Exception exception)
+            {
+                _isGeneratedDamageActive = static () => true;
+                WarfareTweaksWarningLog.LogOnce(
+                    "secondary_attacks_generated_damage_bridge_failed",
+                    $"SecondaryAttacks generated-damage bridge failed; ambiguous generated damage will be suppressed: {exception.Message}");
+                return true;
+            }
         }
     }
 
     internal static bool ShouldSuppressProjectile(Projectile projectile)
     {
         EnsureResolved();
-        return _shouldSuppressProjectile?.Invoke(projectile) is true;
+        try
+        {
+            return _shouldSuppressProjectile?.Invoke(projectile) is true;
+        }
+        catch (Exception exception)
+        {
+            _shouldSuppressProjectile = static _ => true;
+            WarfareTweaksWarningLog.LogOnce(
+                "secondary_attacks_projectile_bridge_failed",
+                $"SecondaryAttacks projectile bridge failed; ambiguous projectiles will be suppressed: {exception.Message}");
+            return true;
+        }
     }
 
     internal static bool TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName)
@@ -39,8 +61,24 @@ internal static class WarfareTweaksBridge
             return false;
         }
 
-        if (!_tryGetCaptainValheimShieldHitWeaponPrefabName(out string contextWeaponPrefabName) ||
-            string.IsNullOrWhiteSpace(contextWeaponPrefabName))
+        string contextWeaponPrefabName;
+        try
+        {
+            if (!_tryGetCaptainValheimShieldHitWeaponPrefabName(out contextWeaponPrefabName))
+            {
+                return false;
+            }
+        }
+        catch (Exception exception)
+        {
+            _tryGetCaptainValheimShieldHitWeaponPrefabName = null;
+            WarfareTweaksWarningLog.LogOnce(
+                "captain_valheim_shield_hit_bridge_failed",
+                $"CaptainValheim shield-hit bridge failed; using the safe fallback: {exception.Message}");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(contextWeaponPrefabName))
         {
             return false;
         }

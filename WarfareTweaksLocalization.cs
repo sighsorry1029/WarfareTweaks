@@ -52,9 +52,9 @@ internal static class WarfareTweaksLocalization
     internal const string TooltipFallbackValue = "$wt_tooltip_fallback_value";
     internal const string TooltipFallback = "$wt_tooltip_fallback";
 
-    internal static void Load(WarfareTweaksPlugin plugin)
+    internal static void Load(WarfareTweaksPlugin plugin, HarmonyLib.Harmony harmony)
     {
-        Localizer.Load(plugin);
+        Localizer.Load(plugin, harmony);
     }
 
     internal static string Localize(string token, string fallback)

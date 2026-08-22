@@ -17,7 +17,7 @@ namespace WarfareTweaks;
 public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 {
     internal const string ModName = "WarfareTweaks";
-    internal const string ModVersion = "1.0.1";
+    internal const string ModVersion = "1.0.2";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string WarfareYamlFileName = "WarfareTweaks.yml";
@@ -54,7 +54,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         _syncedWarfareYaml = new CustomSyncedValue<string>(ConfigSync, "warfare_tweaks_warfare_yaml", "");
         _syncedWarfareYaml.ValueChanged += OnSyncedWarfareYamlChanged;
 
-        WarfareTweaksLocalization.Load(this);
+        WarfareTweaksLocalization.Load(this, _harmony);
         if (!ReloadLocalConfigFromDisk(applyToWorld: false))
         {
             ApplyEmbeddedDefaultConfig();
@@ -62,9 +62,9 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
         Assembly assembly = Assembly.GetExecutingAssembly();
         _harmony.PatchAll(assembly);
-        WarfareCompat.TryInstallHooks();
-        WarfareSkillCompat.TryInstallHooks();
-        JewelcraftingThrowableCompat.TryInstallHooks();
+        TryInstallCompatibilityHooks("Warfare effects", () => WarfareCompat.TryInstallHooks(_harmony));
+        TryInstallCompatibilityHooks("Warfare skills", () => WarfareSkillCompat.TryInstallHooks(_harmony));
+        TryInstallCompatibilityHooks("Jewelcrafting throwables", () => JewelcraftingThrowableCompat.TryInstallHooks(_harmony));
         SetupWatcher();
     }
 
@@ -77,6 +77,9 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
         _watcher?.Dispose();
         _harmony.UnpatchSelf();
+        WarfareCompat.ResetHookState();
+        WarfareSkillCompat.ResetHookState();
+        JewelcraftingThrowableCompat.ResetHookState();
     }
 
     internal static void ApplyToObjectDb(ObjectDB objectDb, bool logMissingPrefabWarnings = false)
@@ -87,6 +90,10 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         }
 
         WarfareCompat.ApplyConfiguredEffects(objectDb, _currentEffects, logMissingPrefabWarnings);
+        WarfareGreatbowSoundCompat.ApplyToObjectDb(
+            objectDb,
+            ZNetScene.instance,
+            logMissingPrefabWarnings);
         WarfareThrowableCompat.ApplyToObjectDb(objectDb);
         WarfareSkillCompat.ApplyToObjectDb(objectDb);
     }
@@ -98,13 +105,18 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
             return;
         }
 
+        ChainLightningDedupSystem.RestoreVanillaChainLightningBehavior(scene);
+
         if (ObjectDB.instance != null)
         {
             WarfareCompat.ApplyConfiguredEffects(ObjectDB.instance, _currentEffects, logMissingPrefabWarnings: true);
+            WarfareGreatbowSoundCompat.ApplyToObjectDb(
+                ObjectDB.instance,
+                scene,
+                logMissingSfxWarning: true);
         }
 
         WarfareThrowableCompat.ApplyToZNetScene(scene);
-        ChainLightningDedupSystem.RestoreVanillaChainLightningBehavior(scene);
     }
 
     private void SetupWatcher()
@@ -204,12 +216,10 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
         if (ObjectDB.instance != null)
         {
-            ApplyToObjectDb(ObjectDB.instance, logMissingPrefabWarnings: ZNetScene.instance != null);
-        }
-
-        if (ZNetScene.instance != null)
-        {
-            ApplyToZNetScene(ZNetScene.instance);
+            WarfareCompat.ApplyConfiguredEffects(
+                ObjectDB.instance,
+                _currentEffects,
+                logMissingPrefabWarnings: ZNetScene.instance != null);
         }
 
         ModLogger.LogInfo("WarfareTweaks YAML reload complete.");
@@ -218,7 +228,7 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 
     private static void ApplyEmbeddedDefaultConfig()
     {
-        string defaultYaml = WarfareTweaksDefaultYamlResources.Load(WarfareYamlFileName);
+        string defaultYaml = WarfareTweaksConfigLoader.LoadEmbeddedDefault(WarfareYamlFileName);
         if (!TryApplyYamlText(defaultYaml, applyToWorld: false))
         {
             throw new InvalidDataException($"Embedded default {WarfareYamlFileName} is invalid.");
@@ -227,5 +237,20 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         PublishSyncedYaml(defaultYaml);
         ModLogger.LogWarning(
             $"Using embedded default {WarfareYamlFileName} because the local file could not be loaded.");
+    }
+
+    private static void TryInstallCompatibilityHooks(string featureName, Action installer)
+    {
+        try
+        {
+            installer();
+        }
+        catch (Exception exception)
+        {
+            WarfareTweaksWarningLog.LogOnce(
+                $"compat_hook_install_failed_{featureName}",
+                $"Could not finish installing {featureName} compatibility hooks; " +
+                $"successfully installed hooks, if any, remain active: {exception.Message}");
+        }
     }
 }

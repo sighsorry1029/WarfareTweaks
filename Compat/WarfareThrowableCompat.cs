@@ -24,7 +24,7 @@ internal static class WarfareThrowableCompat
     private static readonly HashSet<string> PatchedWeaponSharedNames = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> PatchedProjectilePrefabNames = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConditionalWeakTable<ItemDrop.ItemData, BrokenRemovalPreservationState> BrokenRemovalPreservations = new();
-    private static readonly Dictionary<string, RecipeLookupEntry> RecipesByPrefabOrSharedName = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, Recipe> RecipesByPrefabOrSharedName = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, GameObject> DropPrefabsBySharedName = new(StringComparer.OrdinalIgnoreCase);
     private static ObjectDB? _cachedRecipeObjectDb;
     private static ObjectDB? _cachedDropPrefabObjectDb;
@@ -72,7 +72,7 @@ internal static class WarfareThrowableCompat
                 continue;
             }
 
-            PatchThrowableWeapon(itemDrop!, itemPrefab, out int weaponProjectileCount);
+            int weaponProjectileCount = ConfigureWeaponDurability(itemDrop!.m_itemData);
             weaponCount++;
             projectileCount += weaponProjectileCount;
             patchedSharedNames.Add(sharedData!.m_name);
@@ -130,14 +130,14 @@ internal static class WarfareThrowableCompat
     internal static void ApplyProjectileToolTierIfNeeded(HitData? hit)
     {
         if (hit == null ||
-            !WarfareTweaksProjectileHitContext.TryPeek(out ProjectileHitContext context) ||
-            context.Projectile == null ||
-            !IsWarfareThrowableProjectile(context.Projectile))
+            !WarfareTweaksProjectileHitContext.TryPeek(out Projectile? projectile) ||
+            projectile == null ||
+            !IsWarfareThrowableProjectile(projectile))
         {
             return;
         }
 
-        short toolTier = ResolveProjectileToolTier(context.Projectile);
+        short toolTier = ResolveProjectileToolTier(projectile);
         if (toolTier <= hit.m_toolTier)
         {
             return;
@@ -150,9 +150,9 @@ internal static class WarfareThrowableCompat
     {
         if (hit == null ||
             hit.m_damage.m_chop <= 0f ||
-            !WarfareTweaksProjectileHitContext.TryPeek(out ProjectileHitContext context) ||
-            context.Projectile == null ||
-            !IsWarfareThrowableProjectile(context.Projectile))
+            !WarfareTweaksProjectileHitContext.TryPeek(out Projectile? projectile) ||
+            projectile == null ||
+            !IsWarfareThrowableProjectile(projectile))
         {
             return;
         }
@@ -280,20 +280,10 @@ internal static class WarfareThrowableCompat
         }
 
         ConfigureWeaponDurability(attack.m_weapon);
+        PatchAttack(attack);
         attack.m_consumeItem = false;
         attack.m_ammoItem = null;
         attack.m_lastUsedAmmo = null;
-        if (IsWarfareThrowableItemPrefab(attack.m_spawnOnHit))
-        {
-            attack.m_spawnOnHit = null;
-            attack.m_spawnOnHitChance = 0f;
-        }
-
-        if (attack.m_attackProjectile != null)
-        {
-            PatchProjectilePrefab(attack.m_attackProjectile);
-        }
-
     }
 
     internal static bool ShouldPreserveWeaponOnConsume(Attack? attack)
@@ -307,32 +297,20 @@ internal static class WarfareThrowableCompat
         return true;
     }
 
-    internal static bool ShouldSkipAmmoConsumption(Attack? attack)
+    internal static int BeginInventoryRemovalPreservation(Attack? attack)
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            return false;
+            return 0;
         }
 
         PrepareAttackForUse(attack);
-        return true;
+        return ++InventoryRemovalPreservationDepth;
     }
 
-    internal static bool BeginInventoryRemovalPreservation(Attack? attack)
+    internal static void EndInventoryRemovalPreservation(int depthToken)
     {
-        if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
-        {
-            return false;
-        }
-
-        PrepareAttackForUse(attack);
-        InventoryRemovalPreservationDepth++;
-        return true;
-    }
-
-    internal static void EndInventoryRemovalPreservation(bool active)
-    {
-        if (!active || InventoryRemovalPreservationDepth <= 0)
+        if (depthToken <= 0 || InventoryRemovalPreservationDepth != depthToken)
         {
             return;
         }
@@ -396,20 +374,6 @@ internal static class WarfareThrowableCompat
     }
 
     // Prefab mutation helpers are shared by ObjectDB setup and runtime attack repair.
-    private static void PatchThrowableWeapon(ItemDrop itemDrop, GameObject itemPrefab, out int projectileCount)
-    {
-        projectileCount = 0;
-        ItemDrop.ItemData itemData = itemDrop.m_itemData;
-        ConfigureWeaponDurability(itemData);
-        ItemDrop.ItemData.SharedData sharedData = itemData.m_shared;
-        sharedData.m_maxStackSize = 1;
-        sharedData.m_autoStack = false;
-
-        projectileCount += PatchAttack(sharedData.m_attack);
-        projectileCount += PatchAttack(sharedData.m_secondaryAttack);
-        PatchedWeaponPrefabNames.Add(GetPrefabName(itemPrefab));
-    }
-
     private static int PatchAttack(Attack? attack)
     {
         if (attack == null)
@@ -740,21 +704,19 @@ internal static class WarfareThrowableCompat
     private static Recipe? FindRecipeForItem(ObjectDB objectDb, string prefabName, string sharedName)
     {
         EnsureRecipeLookup(objectDb);
-        RecipeLookupEntry? bestEntry = null;
         if (!string.IsNullOrWhiteSpace(prefabName) &&
-            RecipesByPrefabOrSharedName.TryGetValue(prefabName, out RecipeLookupEntry? prefabEntry))
+            RecipesByPrefabOrSharedName.TryGetValue(prefabName, out Recipe? prefabRecipe))
         {
-            bestEntry = prefabEntry;
+            return prefabRecipe;
         }
 
         if (!string.IsNullOrWhiteSpace(sharedName) &&
-            RecipesByPrefabOrSharedName.TryGetValue(sharedName, out RecipeLookupEntry? sharedNameEntry) &&
-            (bestEntry == null || sharedNameEntry.Index < bestEntry.Index))
+            RecipesByPrefabOrSharedName.TryGetValue(sharedName, out Recipe? sharedNameRecipe))
         {
-            bestEntry = sharedNameEntry;
+            return sharedNameRecipe;
         }
 
-        return bestEntry?.Recipe;
+        return null;
     }
 
     private static void EnsureRecipeLookup(ObjectDB objectDb)
@@ -771,9 +733,8 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        for (int index = 0; index < objectDb.m_recipes.Count; index++)
+        foreach (Recipe recipe in objectDb.m_recipes)
         {
-            Recipe recipe = objectDb.m_recipes[index];
             ItemDrop? item = recipe?.m_item;
             ItemDrop.ItemData.SharedData? sharedData = item?.m_itemData?.m_shared;
             if (item == null || sharedData == null)
@@ -781,16 +742,16 @@ internal static class WarfareThrowableCompat
                 continue;
             }
 
-            AddRecipeLookup(GetPrefabName(item.gameObject), recipe!, index);
-            AddRecipeLookup(sharedData.m_name, recipe!, index);
+            AddRecipeLookup(GetPrefabName(item.gameObject), recipe!);
+            AddRecipeLookup(sharedData.m_name, recipe!);
         }
     }
 
-    private static void AddRecipeLookup(string key, Recipe recipe, int index)
+    private static void AddRecipeLookup(string key, Recipe recipe)
     {
         if (!string.IsNullOrWhiteSpace(key) && !RecipesByPrefabOrSharedName.ContainsKey(key))
         {
-            RecipesByPrefabOrSharedName.Add(key, new RecipeLookupEntry(recipe, index));
+            RecipesByPrefabOrSharedName.Add(key, recipe);
         }
     }
 
@@ -907,7 +868,7 @@ internal static class WarfareThrowableCompat
         return null;
     }
 
-    private static void ConfigureWeaponDurability(ItemDrop.ItemData weapon)
+    private static int ConfigureWeaponDurability(ItemDrop.ItemData weapon)
     {
         ItemDrop.ItemData.SharedData sharedData = weapon.m_shared;
         weapon.m_stack = 1;
@@ -928,8 +889,7 @@ internal static class WarfareThrowableCompat
             sharedData.m_maxDurability = DefaultMaxDurability;
         }
 
-        PatchAttack(sharedData.m_attack);
-        PatchAttack(sharedData.m_secondaryAttack);
+        int projectileCount = PatchAttack(sharedData.m_attack) + PatchAttack(sharedData.m_secondaryAttack);
 
         bool initialized = weapon.m_customData.ContainsKey(DurabilityInitializedKey);
         if (!initialized || maxDurabilityWasConsumableSized)
@@ -942,6 +902,8 @@ internal static class WarfareThrowableCompat
 
             weapon.m_customData[DurabilityInitializedKey] = "true";
         }
+
+        return projectileCount;
     }
 
     private static void EnsureDropPrefab(ItemDrop.ItemData weapon)
@@ -1182,11 +1144,7 @@ internal static class WarfareThrowableCompat
 
     internal static string GetPrefabName(GameObject prefab)
     {
-        const string cloneSuffix = "(Clone)";
-        string prefabName = prefab.name;
-        return prefabName.EndsWith(cloneSuffix, StringComparison.Ordinal)
-            ? prefabName.Substring(0, prefabName.Length - cloneSuffix.Length)
-            : prefabName;
+        return WarfareTweaksCompat.NormalizePrefabName(prefab?.name);
     }
 
     internal static string GetItemPrefabName(ItemDrop.ItemData? item)
@@ -1220,19 +1178,6 @@ internal static class WarfareThrowableCompat
 
         return name.IndexOf(ThrowableWeaponPrefix, StringComparison.OrdinalIgnoreCase) >= 0 ||
                name.IndexOf(ThrowableSharedNameToken, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private sealed class RecipeLookupEntry
-    {
-        public RecipeLookupEntry(Recipe recipe, int index)
-        {
-            Recipe = recipe;
-            Index = index;
-        }
-
-        public Recipe Recipe { get; }
-
-        public int Index { get; }
     }
 
     private sealed class BrokenRemovalPreservationState

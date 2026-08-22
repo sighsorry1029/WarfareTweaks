@@ -12,11 +12,10 @@ internal static class JewelcraftingThrowableCompat
     private const string UtilsTypeName = "Jewelcrafting.Utils";
     private const string JewelcraftingTypeName = "Jewelcrafting.Jewelcrafting";
     private static bool _hooksInstalled;
-    private static bool _reportedFailure;
     private static FieldInfo? _socketBlacklistField;
     private static FieldInfo? _prefabBlacklistField;
 
-    internal static void TryInstallHooks()
+    internal static void TryInstallHooks(Harmony harmony)
     {
         if (_hooksInstalled)
         {
@@ -52,22 +51,42 @@ internal static class JewelcraftingThrowableCompat
         }
 
         CacheBlacklistFields(jewelcraftingAssembly);
-        Harmony harmony = new("sighsorry.WarfareTweaks.JewelcraftingThrowableCompat");
-        harmony.Patch(isSocketableItemMethod, postfix: new HarmonyMethod(postfixMethod));
+        int patchedCount = WarfareTweaksCompat.TryPatch(
+            harmony,
+            isSocketableItemMethod,
+            "Jewelcrafting throwable socketability",
+            postfix: new HarmonyMethod(postfixMethod))
+            ? 1
+            : 0;
         if (updateRecipeListMethod != null)
         {
-            harmony.Patch(
-                updateRecipeListMethod,
-                prefix: new HarmonyMethod(prepareInventoryPrefixMethod) { priority = Priority.First });
+            if (WarfareTweaksCompat.TryPatch(
+                    harmony,
+                    updateRecipeListMethod,
+                    "Jewelcrafting throwable inventory preparation",
+                    prefix: new HarmonyMethod(prepareInventoryPrefixMethod) { priority = Priority.First }))
+            {
+                patchedCount++;
+            }
         }
         else
         {
             ReportFailure("InventoryGui.UpdateRecipeList was not found; socket tab pre-normalization is unavailable.");
         }
 
+        if (patchedCount == 0)
+        {
+            return;
+        }
+
         _hooksInstalled = true;
         WarfareTweaksPlugin.ModLogger.LogInfo(
-            "Installed Jewelcrafting compatibility hooks for Warfare throwing axe socketing.");
+            $"Installed {patchedCount} Jewelcrafting compatibility hook(s) for Warfare throwing axe socketing.");
+    }
+
+    internal static void ResetHookState()
+    {
+        _hooksInstalled = false;
     }
 
     private static void PrepareInventoryBeforeRecipeListPrefix()
@@ -178,13 +197,8 @@ internal static class JewelcraftingThrowableCompat
 
     private static void ReportFailure(string message)
     {
-        if (_reportedFailure)
-        {
-            return;
-        }
-
-        _reportedFailure = true;
-        WarfareTweaksPlugin.ModLogger.LogWarning(
+        WarfareTweaksWarningLog.LogOnce(
+            "jewelcrafting_throwable_compat_failure",
             $"Jewelcrafting Warfare throwable compatibility skipped: {message}");
     }
 

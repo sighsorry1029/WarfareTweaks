@@ -18,7 +18,7 @@ internal static partial class WarfareCompat
 
     private static readonly Dictionary<string, HashSet<string>> SuppressedEffectsByPrefabName = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<MethodBase, string> PatchedPrefixMethods = new();
-    private static readonly Dictionary<MethodBase, string> PatchedAddToItemMethods = new();
+    private static readonly HashSet<MethodBase> PatchedAddToItemMethods = new();
     private static readonly Dictionary<string, WarfareAppliedAssignment> AppliedConfiguredAssignments = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, WarfareAttackSpawnOverrideState> AppliedAttackSpawnOverrides = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, WarfareAoeOverrideState> AppliedAoeOverrides = new(StringComparer.OrdinalIgnoreCase);
@@ -27,14 +27,12 @@ internal static partial class WarfareCompat
     private static readonly ConditionalWeakTable<StatusEffect, WarfareHasteTuningState> HasteTuningsByStatus = new();
     private static readonly List<WarfareDotSourceDamageContext> ActiveDotSourceDamageContexts = new();
     private static readonly Dictionary<string, ConfiguredWarfareEffectLookup> ConfiguredEffectsByPrefabAndEffectId = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Dictionary<string, Type> LoadedTypesByName = new(StringComparer.Ordinal);
     private static readonly Dictionary<Type, WarfareTargetAccessors> TargetAccessorsByEffectType = new();
     private static readonly Dictionary<Type, WarfareTargetSetAccessors> TargetSetAccessorsByType = new();
     private static readonly int WarfareHasteStackingHash = "Warfare_Haste_Stacking".GetStableHashCode();
     private static readonly int WarfareFireAndIceHasteStackingHash = "WarfareFireAndIce_Haste_Stacking".GetStableHashCode();
     private const float WarfareSourceDamageDotDuration = 10f;
     private const float WarfareSourceDamageDotTickInterval = 1f;
-    private static float? _pendingHasteMoveSpeedMultiplier;
     private static bool _allowWarfareAddToItem;
     private static bool _hooksInstalled;
     private static readonly string[] ChainLightningMistlandsDefaultPrefabs =
@@ -181,14 +179,13 @@ internal static partial class WarfareCompat
         return lookup;
     }
 
-    internal static void TryInstallHooks()
+    internal static void TryInstallHooks(Harmony harmony)
     {
         if (_hooksInstalled)
         {
             return;
         }
 
-        Harmony harmony = new("sighsorry.WarfareTweaks");
         int patchedCount = TryInstallAttackWeaponContextHook(harmony);
         patchedCount += TryInstallBuiltInDirectHitGateHooks(harmony);
         patchedCount += TryInstallAddToItemGateHooks(harmony);
@@ -204,6 +201,11 @@ internal static partial class WarfareCompat
         }
     }
 
+    internal static void ResetHookState()
+    {
+        _hooksInstalled = false;
+    }
+
     internal static void RebuildBuiltInEffects(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
     {
         SuppressedEffectsByPrefabName.Clear();
@@ -211,14 +213,34 @@ internal static partial class WarfareCompat
 
         foreach (WarfareBuiltInEffectRegistration registration in BuiltInRegistrations)
         {
-            if (!TryFindConfiguredEffect(effectConfigs, registration, out EffectBehaviorConfig? effectConfig) ||
-                effectConfig == null)
+            bool hasConfiguredBlock = false;
+            HashSet<string> configuredPrefabNames = new(StringComparer.OrdinalIgnoreCase);
+            foreach ((string configuredEffectId, EffectBehaviorConfig configuredEffect) in effectConfigs)
+            {
+                if (configuredEffect == null ||
+                    !TryFindRegistration(configuredEffectId, out WarfareBuiltInEffectRegistration? configuredRegistration) ||
+                    !ReferenceEquals(configuredRegistration, registration))
+                {
+                    continue;
+                }
+
+                hasConfiguredBlock = true;
+                configuredPrefabNames.UnionWith(GetConfiguredPrefabNames(configuredEffect));
+            }
+
+            if (!hasConfiguredBlock)
             {
                 AddSuppressedDefaultAssignments(registration);
                 continue;
             }
 
-            AddSuppressedMissingDefaultAssignments(registration, effectConfig);
+            foreach (string prefabName in registration.PrefabNames)
+            {
+                if (!configuredPrefabNames.Contains(prefabName))
+                {
+                    AddSuppressedEffect(prefabName, registration.Id);
+                }
+            }
         }
     }
 
@@ -238,10 +260,10 @@ internal static partial class WarfareCompat
 
         if (!IsWarfareLoaded())
         {
-            if (warfareEffects.Count > 0 &&
-                WarfareTweaksWarningLog.TryMarkReported("warfare_effects_missing_warfare"))
+            if (warfareEffects.Count > 0)
             {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
+                WarfareTweaksWarningLog.LogOnce(
+                    "warfare_effects_missing_warfare",
                     $"Skipping {WarfareTweaksPlugin.WarfareYamlFileName} warfare effect assignments: Warfare is not installed.");
             }
 
@@ -295,11 +317,9 @@ internal static partial class WarfareCompat
 
             if (!TryFindRegistration(effectId, out WarfareBuiltInEffectRegistration? registration))
             {
-                if (WarfareTweaksWarningLog.TryMarkReported($"warfare_effect_unknown_{effectId}"))
-                {
-                    WarfareTweaksPlugin.ModLogger.LogWarning(
-                        $"Skipping warfare effect '{effectId}': no matching Warfare built-in effect is known.");
-                }
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_effect_unknown_{effectId}",
+                    $"Skipping warfare effect '{effectId}': no matching Warfare built-in effect is known.");
 
                 continue;
             }
@@ -312,11 +332,9 @@ internal static partial class WarfareCompat
                     continue;
                 }
 
-                if (WarfareTweaksWarningLog.TryMarkReported($"warfare_effect_type_missing_{resolvedRegistration.Id}"))
-                {
-                    WarfareTweaksPlugin.ModLogger.LogWarning(
-                        $"Skipping warfare effect '{resolvedRegistration.Id}': none of its known Warfare type(s) were found.");
-                }
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_effect_type_missing_{resolvedRegistration.Id}",
+                    $"Skipping warfare effect '{resolvedRegistration.Id}': none of its known Warfare type(s) were found.");
 
                 continue;
             }
@@ -341,11 +359,9 @@ internal static partial class WarfareCompat
                         continue;
                     }
 
-                    if (WarfareTweaksWarningLog.TryMarkReported($"warfare_effect_prefab_missing_{resolvedRegistration.Id}_{prefabName}"))
-                    {
-                        WarfareTweaksPlugin.ModLogger.LogWarning(
-                            $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': prefab was not found in ObjectDB.");
-                    }
+                    WarfareTweaksWarningLog.LogOnce(
+                        $"warfare_effect_prefab_missing_{resolvedRegistration.Id}_{prefabName}",
+                        $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': prefab was not found in ObjectDB.");
 
                     continue;
                 }
@@ -354,11 +370,9 @@ internal static partial class WarfareCompat
                 Type? effectType = FindLoadedType(effectTypeName);
                 if (effectType == null)
                 {
-                    if (WarfareTweaksWarningLog.TryMarkReported($"warfare_effect_type_missing_{resolvedRegistration.Id}_{prefabName}"))
-                    {
-                        WarfareTweaksPlugin.ModLogger.LogWarning(
-                            $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': Warfare type '{effectTypeName}' was not found.");
-                    }
+                    WarfareTweaksWarningLog.LogOnce(
+                        $"warfare_effect_type_missing_{resolvedRegistration.Id}_{prefabName}",
+                        $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': Warfare type '{effectTypeName}' was not found.");
 
                     continue;
                 }
@@ -367,16 +381,33 @@ internal static partial class WarfareCompat
 
                 if (!TryApplyTargetAssignment(effectType, prefabName, value, out WarfareAppliedAssignment? assignment, out string reason))
                 {
-                    if (WarfareTweaksWarningLog.TryMarkReported($"warfare_effect_add_failed_{resolvedRegistration.Id}_{prefabName}"))
-                    {
-                        WarfareTweaksPlugin.ModLogger.LogWarning(
-                            $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': {reason}");
-                    }
+                    WarfareTweaksWarningLog.LogOnce(
+                        $"warfare_effect_add_failed_{resolvedRegistration.Id}_{prefabName}",
+                        $"Skipping warfare effect '{resolvedRegistration.Id}' on '{prefabName}': {reason}");
 
                     continue;
                 }
 
-                AppliedConfiguredAssignments[$"{resolvedRegistration.Id}:{prefabName}"] = assignment!;
+                string assignmentKey = $"{resolvedRegistration.Id}:{effectTypeName}:{prefabName}";
+                if (AppliedConfiguredAssignments.TryGetValue(
+                        assignmentKey,
+                        out WarfareAppliedAssignment? originalAssignment) &&
+                    originalAssignment.UsesValueTarget == assignment!.UsesValueTarget &&
+                    string.Equals(
+                        originalAssignment.EffectTypeName,
+                        assignment.EffectTypeName,
+                        StringComparison.Ordinal))
+                {
+                    assignment = new WarfareAppliedAssignment(
+                        assignment.EffectTypeName,
+                        assignment.PrefabName,
+                        assignment.UsesValueTarget,
+                        originalAssignment.HadOriginalTarget,
+                        originalAssignment.OriginalValue,
+                        assignment.AppliedValue);
+                }
+
+                AppliedConfiguredAssignments[assignmentKey] = assignment!;
                 appliedCount++;
             }
         }
@@ -391,27 +422,6 @@ internal static partial class WarfareCompat
     {
         return SuppressedEffectsByPrefabName.TryGetValue(weaponPrefabName, out HashSet<string>? suppressedEffects) &&
                suppressedEffects.Contains(effectId);
-    }
-
-    private static bool TryFindConfiguredEffect(
-        IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs,
-        WarfareBuiltInEffectRegistration registration,
-        out EffectBehaviorConfig? effectConfig)
-    {
-        effectConfig = null;
-        foreach ((string configuredEffectId, EffectBehaviorConfig configuredEffect) in effectConfigs)
-        {
-            if (configuredEffect == null ||
-                !registration.EffectIds.Any(effectId => string.Equals(effectId, configuredEffectId?.Trim(), StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            effectConfig = configuredEffect;
-            return true;
-        }
-
-        return false;
     }
 
     private static void RebuildConfiguredEffectLookup(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
@@ -532,21 +542,6 @@ internal static partial class WarfareCompat
         }
     }
 
-    private static void AddSuppressedMissingDefaultAssignments(
-        WarfareBuiltInEffectRegistration registration,
-        EffectBehaviorConfig effectConfig)
-    {
-        foreach (string prefabName in registration.PrefabNames)
-        {
-            if (HasPrefabAssignment(effectConfig, prefabName))
-            {
-                continue;
-            }
-
-            AddSuppressedEffect(prefabName, registration.Id);
-        }
-    }
-
     private static void AddSuppressedEffect(string prefabName, string effectId)
     {
         if (!SuppressedEffectsByPrefabName.TryGetValue(prefabName, out HashSet<string>? effects))
@@ -578,10 +573,13 @@ internal static partial class WarfareCompat
             return 0;
         }
 
-        harmony.Patch(
+        return WarfareTweaksCompat.TryPatch(
+            harmony,
             targetMethod,
-            prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareTryGetAttackWeaponPrefix)));
-        return 1;
+            "Warfare attack weapon context",
+            prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareTryGetAttackWeaponPrefix)))
+            ? 1
+            : 0;
     }
 
     private static bool WarfareTryGetAttackWeaponPrefix(ref string prefab, ref bool __result)
@@ -622,9 +620,15 @@ internal static partial class WarfareCompat
                     continue;
                 }
 
-                harmony.Patch(
-                    targetMethod,
-                    prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareBuiltInDirectHitGatePrefix)));
+                if (!WarfareTweaksCompat.TryPatch(
+                        harmony,
+                        targetMethod,
+                        $"Warfare {registration.Id} direct-hit gate",
+                        prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareBuiltInDirectHitGatePrefix))))
+                {
+                    continue;
+                }
+
                 PatchedPrefixMethods[targetMethod] = registration.Id;
                 patchedCount++;
             }
@@ -635,17 +639,8 @@ internal static partial class WarfareCompat
 
     private static bool WarfareBuiltInDirectHitGatePrefix(MethodBase __originalMethod)
     {
-        bool shouldRun = DirectWeaponHitContextSystem.ShouldCountWeaponEffectHit &&
-                         SuppressBuiltInPrefix(__originalMethod);
-        if (shouldRun &&
-            __originalMethod != null &&
-            PatchedPrefixMethods.TryGetValue(__originalMethod, out string? effectId) &&
-            string.Equals(effectId, "haste", StringComparison.OrdinalIgnoreCase))
-        {
-            _pendingHasteMoveSpeedMultiplier = ResolveConfiguredHasteMoveSpeedMultiplier(1.4f);
-        }
-
-        return shouldRun;
+        return DirectWeaponHitContextSystem.ShouldCountWeaponEffectHit &&
+               SuppressBuiltInPrefix(__originalMethod);
     }
 
     private static int TryInstallAddToItemGateHooks(Harmony harmony)
@@ -673,10 +668,16 @@ internal static partial class WarfareCompat
                     continue;
                 }
 
-                harmony.Patch(
-                    targetMethod,
-                    prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareAddToItemGatePrefix)));
-                PatchedAddToItemMethods[targetMethod] = registration.Id;
+                if (!WarfareTweaksCompat.TryPatch(
+                        harmony,
+                        targetMethod,
+                        $"Warfare {registration.Id} AddToItem gate",
+                        prefix: new HarmonyMethod(typeof(WarfareCompat), nameof(WarfareAddToItemGatePrefix))))
+                {
+                    continue;
+                }
+
+                PatchedAddToItemMethods.Add(targetMethod);
                 patchedCount++;
             }
         }
@@ -688,7 +689,7 @@ internal static partial class WarfareCompat
     {
         return _allowWarfareAddToItem ||
                __originalMethod == null ||
-               !PatchedAddToItemMethods.ContainsKey(__originalMethod);
+               !PatchedAddToItemMethods.Contains(__originalMethod);
     }
 
     private static int TryInstallBleedingTuningHooks(Harmony harmony)
@@ -708,12 +709,12 @@ internal static partial class WarfareCompat
             harmony,
             $"{WarfareStatusEffectsNamespace}.Bleeding+SE_Warfare_Bleeding_Stacking",
             "OnEnable",
-            postfixName: nameof(WarfareBleedingDotStatusOnEnablePostfix));
+            postfixName: nameof(WarfareBleedingDotStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.Bleeding+SE_Warfare_Bleeding_Stacking",
             "SetLevel",
-            postfixName: nameof(WarfareBleedingDotStatusSetLevelPostfix));
+            postfixName: nameof(WarfareBleedingDotStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.Bleeding+SE_Warfare_Bleeding_Stacking",
@@ -723,12 +724,12 @@ internal static partial class WarfareCompat
             harmony,
             $"{WarfareStatusEffectsNamespace}.BleedingSecondaryAttack+SE_Warfare_BleedingSecondaryAttack",
             "OnEnable",
-            postfixName: nameof(WarfareBleedingSecondaryStatusOnEnablePostfix));
+            postfixName: nameof(WarfareBleedingSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.BleedingSecondaryAttack+SE_Warfare_BleedingSecondaryAttack",
             "SetLevel",
-            postfixName: nameof(WarfareBleedingSecondaryStatusSetLevelPostfix));
+            postfixName: nameof(WarfareBleedingSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.BleedingSecondaryAttack+SE_Warfare_BleedingSecondaryAttack",
@@ -738,12 +739,12 @@ internal static partial class WarfareCompat
             harmony,
             $"{WarfareStatusEffectsNamespace}.Impale+SE_Warfare_Impale",
             "OnEnable",
-            postfixName: nameof(WarfareImpaleStatusOnEnablePostfix));
+            postfixName: nameof(WarfareImpaleStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.Impale+SE_Warfare_Impale",
             "SetLevel",
-            postfixName: nameof(WarfareImpaleStatusSetLevelPostfix));
+            postfixName: nameof(WarfareImpaleStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.Impale+SE_Warfare_Impale",
@@ -753,12 +754,12 @@ internal static partial class WarfareCompat
             harmony,
             $"{WarfareStatusEffectsNamespace}.BurningSecondaryAttack+SE_Warfare_BurningSecondaryAttack",
             "OnEnable",
-            postfixName: nameof(WarfareBurningSecondaryStatusOnEnablePostfix));
+            postfixName: nameof(WarfareBurningSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.BurningSecondaryAttack+SE_Warfare_BurningSecondaryAttack",
             "SetLevel",
-            postfixName: nameof(WarfareBurningSecondaryStatusSetLevelPostfix));
+            postfixName: nameof(WarfareBurningSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareStatusEffectsNamespace}.BurningSecondaryAttack+SE_Warfare_BurningSecondaryAttack",
@@ -768,12 +769,12 @@ internal static partial class WarfareCompat
             harmony,
             $"{WarfareFireAndIceStatusEffectsNamespace}.BurningSecondaryAttack+SE_WarfareFireAndIce_BurningSecondaryAttack",
             "OnEnable",
-            postfixName: nameof(WarfareBurningSecondaryStatusOnEnablePostfix));
+            postfixName: nameof(WarfareBurningSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareFireAndIceStatusEffectsNamespace}.BurningSecondaryAttack+SE_WarfareFireAndIce_BurningSecondaryAttack",
             "SetLevel",
-            postfixName: nameof(WarfareBurningSecondaryStatusSetLevelPostfix));
+            postfixName: nameof(WarfareBurningSecondaryStatusPostfix));
         patchedCount += TryPatchWarfareMethod(
             harmony,
             $"{WarfareFireAndIceStatusEffectsNamespace}.BurningSecondaryAttack+SE_WarfareFireAndIce_BurningSecondaryAttack",
@@ -874,8 +875,15 @@ internal static partial class WarfareCompat
         HarmonyMethod? transpiler = !string.IsNullOrWhiteSpace(transpilerName)
             ? new HarmonyMethod(typeof(WarfareCompat), transpilerName)
             : null;
-        harmony.Patch(targetMethod, prefix, postfix, transpiler);
-        return 1;
+        return WarfareTweaksCompat.TryPatch(
+            harmony,
+            targetMethod,
+            $"Warfare {typeName}.{methodName}",
+            prefix,
+            postfix,
+            transpiler)
+            ? 1
+            : 0;
     }
 
     private static void WarfareBleedingStackStatusOnEnablePostfix(object __instance)
@@ -907,7 +915,11 @@ internal static partial class WarfareCompat
         }
 
         stack++;
-        TrySetIntField(__instance, "stack", stack);
+        if (!TrySetIntField(__instance, "stack", stack))
+        {
+            return true;
+        }
+
         if (stack < Mathf.Max(1, tuning.StacksRequired.Value))
         {
             return false;
@@ -924,42 +936,22 @@ internal static partial class WarfareCompat
         return false;
     }
 
-    private static void WarfareBleedingDotStatusOnEnablePostfix(object __instance)
+    private static void WarfareBleedingDotStatusPostfix(object __instance)
     {
         ApplyWarfareBleedStatusTuning(__instance, "bleeding");
     }
 
-    private static void WarfareBleedingDotStatusSetLevelPostfix(object __instance)
-    {
-        ApplyWarfareBleedStatusTuning(__instance, "bleeding");
-    }
-
-    private static void WarfareBleedingSecondaryStatusOnEnablePostfix(object __instance)
+    private static void WarfareBleedingSecondaryStatusPostfix(object __instance)
     {
         ApplyWarfareBleedStatusTuning(__instance, "bleedingSecondary");
     }
 
-    private static void WarfareBleedingSecondaryStatusSetLevelPostfix(object __instance)
-    {
-        ApplyWarfareBleedStatusTuning(__instance, "bleedingSecondary");
-    }
-
-    private static void WarfareImpaleStatusOnEnablePostfix(object __instance)
+    private static void WarfareImpaleStatusPostfix(object __instance)
     {
         ApplyWarfareBleedStatusTuning(__instance, "impale");
     }
 
-    private static void WarfareImpaleStatusSetLevelPostfix(object __instance)
-    {
-        ApplyWarfareBleedStatusTuning(__instance, "impale");
-    }
-
-    private static void WarfareBurningSecondaryStatusOnEnablePostfix(object __instance)
-    {
-        ApplyWarfareBleedStatusTuning(__instance, "burningSecondary");
-    }
-
-    private static void WarfareBurningSecondaryStatusSetLevelPostfix(object __instance)
+    private static void WarfareBurningSecondaryStatusPostfix(object __instance)
     {
         ApplyWarfareBleedStatusTuning(__instance, "burningSecondary");
     }
@@ -971,8 +963,7 @@ internal static partial class WarfareCompat
             return;
         }
 
-        float multiplier = _pendingHasteMoveSpeedMultiplier ?? ResolveConfiguredHasteMoveSpeedMultiplier(1.4f);
-        _pendingHasteMoveSpeedMultiplier = null;
+        float multiplier = ResolveConfiguredHasteMoveSpeedMultiplier(1.4f);
         HasteTuningsByStatus.Remove(status);
         HasteTuningsByStatus.Add(status, new WarfareHasteTuningState(multiplier));
     }
@@ -1029,28 +1020,28 @@ internal static partial class WarfareCompat
 
     private static IEnumerable<CodeInstruction> WarfareAdrenalineSetLevelTranspiler(IEnumerable<CodeInstruction> instructions)
     {
+        List<CodeInstruction> source = instructions.ToList();
+        int matchCount = source.Count(instruction => IsLdcR4(instruction, 350f));
+        if (matchCount != 1)
+        {
+            ReportTranspilerMismatch("adrenaline", "stamina divisor 350", matchCount);
+            return source;
+        }
+
         MethodInfo divisorResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareAdrenalineDivisor));
-        bool replaced = false;
-        foreach (CodeInstruction instruction in instructions)
+        List<CodeInstruction> result = new(source.Count + 2);
+        foreach (CodeInstruction instruction in source)
         {
             if (IsLdcR4(instruction, 350f))
             {
-                foreach (CodeInstruction replacement in BuildAdrenalineDivisorResolverInstructions(instruction, divisorResolver))
-                {
-                    yield return replacement;
-                }
-
-                replaced = true;
+                result.AddRange(BuildAdrenalineDivisorResolverInstructions(instruction, divisorResolver));
                 continue;
             }
 
-            yield return instruction;
+            result.Add(instruction);
         }
 
-        if (!replaced)
-        {
-            ReportTranspilerMismatch("adrenaline", "stamina divisor 350");
-        }
+        return result;
     }
 
     private static IEnumerable<CodeInstruction> ReplaceWarfareBleedUpdateConstants(
@@ -1059,46 +1050,51 @@ internal static partial class WarfareCompat
         float tickIntervalDefault,
         float damageCoefficientDefault)
     {
+        List<CodeInstruction> source = instructions.ToList();
+        int tickIntervalMatchCount = source.Count(instruction => IsLdcR4(instruction, tickIntervalDefault));
+        int damageCoefficientMatchCount = source.Count(instruction => IsLdcR4(instruction, damageCoefficientDefault));
+        if (tickIntervalMatchCount != 1 || damageCoefficientMatchCount != 1)
+        {
+            if (tickIntervalMatchCount != 1)
+            {
+                ReportTranspilerMismatch(
+                    effectId,
+                    $"tick interval {tickIntervalDefault}",
+                    tickIntervalMatchCount);
+            }
+
+            if (damageCoefficientMatchCount != 1)
+            {
+                ReportTranspilerMismatch(
+                    effectId,
+                    $"damage coefficient {damageCoefficientDefault}",
+                    damageCoefficientMatchCount);
+            }
+
+            return source;
+        }
+
         MethodInfo tickIntervalResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareBleedTickInterval));
         MethodInfo damageCoefficientResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareBleedDamageCoefficient));
-        bool replacedTickInterval = false;
-        bool replacedDamageCoefficient = false;
-        foreach (CodeInstruction instruction in instructions)
+        List<CodeInstruction> result = new(source.Count + 4);
+        foreach (CodeInstruction instruction in source)
         {
             if (IsLdcR4(instruction, tickIntervalDefault))
             {
-                foreach (CodeInstruction replacement in BuildFloatResolverInstructions(instruction, tickIntervalDefault, tickIntervalResolver))
-                {
-                    yield return replacement;
-                }
-
-                replacedTickInterval = true;
+                result.AddRange(BuildFloatResolverInstructions(instruction, tickIntervalDefault, tickIntervalResolver));
                 continue;
             }
 
             if (IsLdcR4(instruction, damageCoefficientDefault))
             {
-                foreach (CodeInstruction replacement in BuildFloatResolverInstructions(instruction, damageCoefficientDefault, damageCoefficientResolver))
-                {
-                    yield return replacement;
-                }
-
-                replacedDamageCoefficient = true;
+                result.AddRange(BuildFloatResolverInstructions(instruction, damageCoefficientDefault, damageCoefficientResolver));
                 continue;
             }
 
-            yield return instruction;
+            result.Add(instruction);
         }
 
-        if (!replacedTickInterval)
-        {
-            ReportTranspilerMismatch(effectId, $"tick interval {tickIntervalDefault}");
-        }
-
-        if (!replacedDamageCoefficient)
-        {
-            ReportTranspilerMismatch(effectId, $"damage coefficient {damageCoefficientDefault}");
-        }
+        return result;
     }
 
     private static IEnumerable<CodeInstruction> ReplaceWarfareFixedDamageConstant(
@@ -1106,28 +1102,28 @@ internal static partial class WarfareCompat
         int damageDefault,
         string effectId)
     {
-        MethodInfo damageResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareFixedDamage));
-        bool replaced = false;
-        foreach (CodeInstruction instruction in instructions)
+        List<CodeInstruction> source = instructions.ToList();
+        int matchCount = source.Count(instruction => IsLdcI4(instruction, damageDefault));
+        if (matchCount != 1)
         {
-            if (!replaced && IsLdcI4(instruction, damageDefault))
-            {
-                foreach (CodeInstruction replacement in BuildFixedDamageResolverInstructions(instruction, damageDefault, effectId, damageResolver))
-                {
-                    yield return replacement;
-                }
+            ReportTranspilerMismatch(effectId, $"fixed damage {damageDefault}", matchCount);
+            return source;
+        }
 
-                replaced = true;
+        MethodInfo damageResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareFixedDamage));
+        List<CodeInstruction> result = new(source.Count + 3);
+        foreach (CodeInstruction instruction in source)
+        {
+            if (IsLdcI4(instruction, damageDefault))
+            {
+                result.AddRange(BuildFixedDamageResolverInstructions(instruction, damageDefault, effectId, damageResolver));
                 continue;
             }
 
-            yield return instruction;
+            result.Add(instruction);
         }
 
-        if (!replaced)
-        {
-            ReportTranspilerMismatch(effectId, $"fixed damage {damageDefault}");
-        }
+        return result;
     }
 
     private static IEnumerable<CodeInstruction> ReplaceWarfareFlatDotDamageConstant(
@@ -1135,41 +1131,43 @@ internal static partial class WarfareCompat
         int damageDefault,
         string effectId)
     {
-        MethodInfo damageResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareFlatDotTickDamage));
-        bool replaced = false;
-        foreach (CodeInstruction instruction in instructions)
+        List<CodeInstruction> source = instructions.ToList();
+        int matchCount = source.Count(instruction => IsLdcI4(instruction, damageDefault));
+        if (matchCount != 1)
         {
-            if (!replaced && IsLdcI4(instruction, damageDefault))
+            ReportTranspilerMismatch(effectId, $"flat damage {damageDefault}", matchCount);
+            return source;
+        }
+
+        MethodInfo damageResolver = AccessTools.DeclaredMethod(typeof(WarfareCompat), nameof(ResolveWarfareFlatDotTickDamage));
+        List<CodeInstruction> result = new(source.Count + 2);
+        foreach (CodeInstruction instruction in source)
+        {
+            if (IsLdcI4(instruction, damageDefault))
             {
                 CodeInstruction loadInstance = new(OpCodes.Ldarg_0)
                 {
                     labels = instruction.labels,
                     blocks = instruction.blocks
                 };
-                yield return loadInstance;
-                yield return new CodeInstruction(OpCodes.Ldc_I4, damageDefault);
-                yield return new CodeInstruction(OpCodes.Call, damageResolver);
-                replaced = true;
+                result.Add(loadInstance);
+                result.Add(new CodeInstruction(OpCodes.Ldc_I4, damageDefault));
+                result.Add(new CodeInstruction(OpCodes.Call, damageResolver));
                 continue;
             }
 
-            yield return instruction;
+            result.Add(instruction);
         }
 
-        if (!replaced)
-        {
-            ReportTranspilerMismatch(effectId, $"flat damage {damageDefault}");
-        }
+        return result;
     }
 
-    private static void ReportTranspilerMismatch(string effectId, string expectedValue)
+    private static void ReportTranspilerMismatch(string effectId, string expectedValue, int matchCount)
     {
-        string warningKey = $"warfare_transpiler_mismatch_{effectId}_{expectedValue}";
-        if (WarfareTweaksWarningLog.TryMarkReported(warningKey))
-        {
-            WarfareTweaksPlugin.ModLogger.LogWarning(
-                $"Warfare effect '{effectId}' tuning was not installed because the expected {expectedValue} constant was not found. Warfare may have changed.");
-        }
+        string warningKey = $"warfare_transpiler_mismatch_{effectId}_{expectedValue}_{matchCount}";
+        WarfareTweaksWarningLog.LogOnce(
+            warningKey,
+            $"Warfare effect '{effectId}' tuning was not installed because exactly one {expectedValue} constant was expected, but {matchCount} were found. Warfare may have changed.");
     }
 
     private static IEnumerable<CodeInstruction> BuildFloatResolverInstructions(
@@ -1548,16 +1546,10 @@ internal static partial class WarfareCompat
             return defaultValue;
         }
 
-        EffectBehaviorConfig effectConfig = lookup.EffectConfig;
-        EffectBehaviorOverrideConfig? prefabOverride = lookup.PrefabOverride;
-        if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
-        {
-            return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
-        }
-
-        return !Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f)
-            ? Mathf.Max(0f, effectConfig.MoveSpeedMultiplier)
-            : defaultValue;
+        return ResolveConfiguredHasteMoveSpeedMultiplier(
+            lookup.EffectConfig,
+            lookup.PrefabOverride,
+            defaultValue);
     }
 
     private static bool TryGetCurrentAttackWeaponPrefabName(out string prefabName)
@@ -1608,15 +1600,14 @@ internal static partial class WarfareCompat
 
     internal static void EndWarfareDotSourceDamage(WarfareDotSourceDamageScope scope)
     {
-        if (scope.Context is not WarfareDotSourceDamageContext context)
+        if (scope.Context is not WarfareDotSourceDamageContext context ||
+            !ActiveDotSourceDamageContexts.Remove(context))
         {
             return;
         }
 
         float actualDamage = Mathf.Max(0f, context.HealthBefore - context.Target.GetHealth());
         context.ApplyActualDamage(actualDamage);
-
-        ActiveDotSourceDamageContexts.Remove(context);
     }
 
     private static bool TryGetActiveDotSourceDamage(Character target, string prefabName, out float sourceDamage)
@@ -1699,32 +1690,50 @@ internal static partial class WarfareCompat
     private static bool TryGetIntField(object instance, string fieldName, out int value)
     {
         value = 0;
-        FieldInfo? field = instance.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null)
+        try
+        {
+            FieldInfo? field = instance.GetType().GetField(
+                fieldName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (field == null)
+            {
+                return false;
+            }
+
+            object? fieldValue = field.GetValue(instance);
+            if (fieldValue == null)
+            {
+                return false;
+            }
+
+            value = Convert.ToInt32(fieldValue);
+            return true;
+        }
+        catch
         {
             return false;
         }
-
-        object? fieldValue = field.GetValue(instance);
-        if (fieldValue == null)
-        {
-            return false;
-        }
-
-        value = Convert.ToInt32(fieldValue);
-        return true;
     }
 
     private static bool TrySetIntField(object instance, string fieldName, int value)
     {
-        FieldInfo? field = instance.GetType().GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null)
+        try
+        {
+            FieldInfo? field = instance.GetType().GetField(
+                fieldName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (field == null)
+            {
+                return false;
+            }
+
+            field.SetValue(instance, value);
+            return true;
+        }
+        catch
         {
             return false;
         }
-
-        field.SetValue(instance, value);
-        return true;
     }
 
     private static bool TryFindRegistration(string effectId, out WarfareBuiltInEffectRegistration? registration)
@@ -1741,28 +1750,7 @@ internal static partial class WarfareCompat
 
     private static Type? FindLoadedType(string fullTypeName)
     {
-        string typeName = fullTypeName?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            return null;
-        }
-
-        if (LoadedTypesByName.TryGetValue(typeName, out Type? cachedType))
-        {
-            return cachedType;
-        }
-
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            Type? type = assembly.GetType(typeName, throwOnError: false);
-            if (type != null)
-            {
-                LoadedTypesByName[typeName] = type;
-                return type;
-            }
-        }
-
-        return null;
+        return WarfareTweaksCompat.FindLoadedType(fullTypeName);
     }
 
     private static bool IsWarfareLoaded()
@@ -1893,11 +1881,9 @@ internal static partial class WarfareCompat
                 return true;
             }
 
-            if (WarfareTweaksWarningLog.TryMarkReported($"warfare_chain_lightning_prefab_missing_{chainPrefabName}"))
-            {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
-                    $"Skipping warfare effect '{effectId}': prefab '{chainPrefabName}' was not found.");
-            }
+            WarfareTweaksWarningLog.LogOnce(
+                $"warfare_chain_lightning_prefab_missing_{chainPrefabName}",
+                $"Skipping warfare effect '{effectId}': prefab '{chainPrefabName}' was not found.");
 
             return true;
         }
@@ -1930,11 +1916,9 @@ internal static partial class WarfareCompat
                     continue;
                 }
 
-                if (WarfareTweaksWarningLog.TryMarkReported($"warfare_chain_lightning_weapon_missing_{prefabName}"))
-                {
-                    WarfareTweaksPlugin.ModLogger.LogWarning(
-                        $"Skipping warfare chain lightning on '{prefabName}': prefab was not found in ObjectDB.");
-                }
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_chain_lightning_weapon_missing_{prefabName}",
+                    $"Skipping warfare chain lightning on '{prefabName}': prefab was not found in ObjectDB.");
 
                 continue;
             }
@@ -1942,16 +1926,14 @@ internal static partial class WarfareCompat
             Attack attack = sharedData.m_attack;
             if (attack == null)
             {
-                if (WarfareTweaksWarningLog.TryMarkReported($"warfare_chain_lightning_attack_missing_{prefabName}"))
-                {
-                    WarfareTweaksPlugin.ModLogger.LogWarning(
-                        $"Skipping warfare chain lightning on '{prefabName}': primary attack is missing.");
-                }
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_chain_lightning_attack_missing_{prefabName}",
+                    $"Skipping warfare chain lightning on '{prefabName}': primary attack is missing.");
 
                 continue;
             }
 
-            StoreAttackSpawnOverride(prefabName, attack);
+            WarfareAttackSpawnOverrideState overrideState = StoreAttackSpawnOverride(prefabName, attack);
             float chance = Mathf.Clamp01(Mathf.Max(0f, prefabOverride?.ProcChance ?? effectConfig.ProcChance) * 0.01f);
             if (chance <= 0f)
             {
@@ -1964,6 +1946,7 @@ internal static partial class WarfareCompat
                 attack.m_spawnOnHitChance = chance;
             }
 
+            overrideState.CaptureAppliedValues();
             appliedCount++;
         }
 
@@ -1995,9 +1978,10 @@ internal static partial class WarfareCompat
                 continue;
             }
 
-            StoreAttackSpawnOverride(prefabName, attack);
+            WarfareAttackSpawnOverrideState overrideState = StoreAttackSpawnOverride(prefabName, attack);
             attack.m_spawnOnHit = null;
             attack.m_spawnOnHitChance = 0f;
+            overrideState.CaptureAppliedValues();
             appliedCount++;
         }
     }
@@ -2045,40 +2029,49 @@ internal static partial class WarfareCompat
         Aoe? aoe = chainPrefab.GetComponent<Aoe>() ?? chainPrefab.GetComponentInChildren<Aoe>(true);
         if (aoe == null)
         {
-            if (WarfareTweaksWarningLog.TryMarkReported($"warfare_chain_lightning_aoe_missing_{prefabName}"))
-            {
-                WarfareTweaksPlugin.ModLogger.LogWarning(
-                    $"Skipping warfare chain lightning tuning on '{prefabName}': Aoe component was not found.");
-            }
+            WarfareTweaksWarningLog.LogOnce(
+                $"warfare_chain_lightning_aoe_missing_{prefabName}",
+                $"Skipping warfare chain lightning tuning on '{prefabName}': Aoe component was not found.");
 
             return false;
         }
 
-        StoreAoeOverride(prefabName, aoe);
-        if (effectConfig.LightningDamage.HasValue)
+        bool appliesLightningDamage = effectConfig.LightningDamage.HasValue;
+        bool appliesRadius = effectConfig.Radius.HasValue;
+        bool appliesTtl = effectConfig.Ttl.HasValue;
+        bool appliesHitInterval = effectConfig.HitInterval.HasValue;
+        if (!appliesLightningDamage && !appliesRadius && !appliesTtl && !appliesHitInterval)
         {
-            aoe.m_damage.m_lightning = Mathf.Max(0f, effectConfig.LightningDamage.Value);
+            return false;
         }
 
-        if (effectConfig.Radius.HasValue)
+        WarfareAoeOverrideState overrideState = StoreAoeOverride(prefabName, aoe);
+        if (appliesLightningDamage)
         {
-            aoe.m_radius = Mathf.Max(0f, effectConfig.Radius.Value);
+            aoe.m_damage.m_lightning = Mathf.Max(0f, effectConfig.LightningDamage!.Value);
         }
 
-        if (effectConfig.Ttl.HasValue)
+        if (appliesRadius)
         {
-            aoe.m_ttl = Mathf.Max(0.01f, effectConfig.Ttl.Value);
+            aoe.m_radius = Mathf.Max(0f, effectConfig.Radius!.Value);
         }
 
-        if (effectConfig.HitInterval.HasValue)
+        if (appliesTtl)
         {
-            aoe.m_hitInterval = Mathf.Max(0f, effectConfig.HitInterval.Value);
+            aoe.m_ttl = Mathf.Max(0.01f, effectConfig.Ttl!.Value);
         }
 
-        return effectConfig.LightningDamage.HasValue ||
-               effectConfig.Radius.HasValue ||
-               effectConfig.Ttl.HasValue ||
-               effectConfig.HitInterval.HasValue;
+        if (appliesHitInterval)
+        {
+            aoe.m_hitInterval = Mathf.Max(0f, effectConfig.HitInterval!.Value);
+        }
+
+        overrideState.CaptureAppliedValues(
+            appliesLightningDamage,
+            appliesRadius,
+            appliesTtl,
+            appliesHitInterval);
+        return true;
     }
 
     private static GameObject? FindWarfarePrefab(ObjectDB objectDb, string prefabName)
@@ -2181,89 +2174,91 @@ internal static partial class WarfareCompat
             return;
         }
 
-        foreach (WarfareAppliedAssignment assignment in AppliedConfiguredAssignments.Values)
+        List<string> restoredAssignmentKeys = new();
+        foreach ((string assignmentKey, WarfareAppliedAssignment assignment) in AppliedConfiguredAssignments)
         {
             Type? effectType = FindLoadedType(assignment.EffectTypeName);
             if (effectType == null)
             {
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_effect_restore_type_missing_{assignment.EffectTypeName}",
+                    $"Could not restore Warfare effect assignments because type " +
+                    $"'{assignment.EffectTypeName}' is no longer loaded; ownership records were retained.");
                 continue;
             }
 
-            TryRestoreTargetAssignment(effectType, assignment, out _);
+            if (!TryRestoreTargetAssignment(effectType, assignment, out string reason))
+            {
+                WarfareTweaksWarningLog.LogOnce(
+                    $"warfare_effect_restore_failed_{assignment.EffectTypeName}_{assignment.PrefabName}",
+                    $"Could not restore Warfare effect type '{assignment.EffectTypeName}' assignment for prefab " +
+                    $"'{assignment.PrefabName}': {reason}");
+                continue;
+            }
+
+            restoredAssignmentKeys.Add(assignmentKey);
         }
 
-        AppliedConfiguredAssignments.Clear();
+        foreach (string assignmentKey in restoredAssignmentKeys)
+        {
+            AppliedConfiguredAssignments.Remove(assignmentKey);
+        }
     }
 
     private static void ResetAppliedPrefabOverrides()
     {
         foreach (WarfareAttackSpawnOverrideState state in AppliedAttackSpawnOverrides.Values)
         {
-            if (state.Attack == null)
-            {
-                continue;
-            }
-
-            state.Attack.m_spawnOnHit = state.OriginalSpawnOnHit;
-            state.Attack.m_spawnOnHitChance = state.OriginalSpawnOnHitChance;
+            state.RestoreUnchangedValues();
         }
 
         AppliedAttackSpawnOverrides.Clear();
 
         foreach (WarfareAoeOverrideState state in AppliedAoeOverrides.Values)
         {
-            if (state.Aoe == null)
-            {
-                continue;
-            }
-
-            state.Aoe.m_damage = state.OriginalDamage;
-            state.Aoe.m_radius = state.OriginalRadius;
-            state.Aoe.m_ttl = state.OriginalTtl;
-            state.Aoe.m_hitInterval = state.OriginalHitInterval;
+            state.RestoreUnchangedValues();
         }
 
         AppliedAoeOverrides.Clear();
 
         foreach (WarfareAttackStatusEffectOverrideState state in AppliedAttackStatusEffectOverrides.Values)
         {
-            if (state.ItemDrop?.m_itemData?.m_shared == null)
-            {
-                continue;
-            }
-
-            state.ItemDrop.m_itemData.m_shared.m_attackStatusEffect = state.OriginalAttackStatusEffect;
+            state.RestoreIfUnchanged();
         }
 
         AppliedAttackStatusEffectOverrides.Clear();
     }
 
-    private static void StoreAttackSpawnOverride(string prefabName, Attack attack)
+    private static WarfareAttackSpawnOverrideState StoreAttackSpawnOverride(string prefabName, Attack attack)
     {
-        if (AppliedAttackSpawnOverrides.ContainsKey(prefabName))
+        if (AppliedAttackSpawnOverrides.TryGetValue(prefabName, out WarfareAttackSpawnOverrideState? state))
         {
-            return;
+            return state;
         }
 
-        AppliedAttackSpawnOverrides[prefabName] = new WarfareAttackSpawnOverrideState(
+        state = new WarfareAttackSpawnOverrideState(
             attack,
             attack.m_spawnOnHit,
             attack.m_spawnOnHitChance);
+        AppliedAttackSpawnOverrides[prefabName] = state;
+        return state;
     }
 
-    private static void StoreAoeOverride(string prefabName, Aoe aoe)
+    private static WarfareAoeOverrideState StoreAoeOverride(string prefabName, Aoe aoe)
     {
-        if (AppliedAoeOverrides.ContainsKey(prefabName))
+        if (AppliedAoeOverrides.TryGetValue(prefabName, out WarfareAoeOverrideState? state))
         {
-            return;
+            return state;
         }
 
-        AppliedAoeOverrides[prefabName] = new WarfareAoeOverrideState(
+        state = new WarfareAoeOverrideState(
             aoe,
-            aoe.m_damage,
+            aoe.m_damage.m_lightning,
             aoe.m_radius,
             aoe.m_ttl,
             aoe.m_hitInterval);
+        AppliedAoeOverrides[prefabName] = state;
+        return state;
     }
 
     private static int RemoveBuiltInTargetAssignments(IReadOnlyDictionary<string, EffectBehaviorConfig> effectConfigs)
@@ -2334,13 +2329,22 @@ internal static partial class WarfareCompat
 
         if (targets is IDictionary dictionary)
         {
-            if (dictionary.Contains(prefabName))
+            try
             {
-                dictionary.Remove(prefabName);
-                removed = true;
-            }
+                if (dictionary.Contains(prefabName))
+                {
+                    dictionary.Remove(prefabName);
+                    removed = true;
+                }
 
-            return true;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                reason = $"Could not remove from Warfare type '{effectType.FullName}' Targets dictionary: " +
+                         $"{GetInvocationErrorMessage(exception)}";
+                return false;
+            }
         }
 
         if (!TryInvokeSetTargetContains(targets!, prefabName, out bool contains, out reason))
@@ -2379,9 +2383,12 @@ internal static partial class WarfareCompat
             {
                 prefabNames.Add(prefabName);
             }
+        }
 
-            if (!TryFindConfiguredEffect(effectConfigs, registration, out EffectBehaviorConfig? effectConfig) ||
-                effectConfig == null)
+        foreach ((string configuredEffectId, EffectBehaviorConfig effectConfig) in effectConfigs)
+        {
+            if (effectConfig == null ||
+                !TryFindRegistration(configuredEffectId, out WarfareBuiltInEffectRegistration? _))
             {
                 continue;
             }
@@ -2488,7 +2495,8 @@ internal static partial class WarfareCompat
 
         if (!TryGetTargets(effectType, out object? targets, out reason))
         {
-            return TryInvokeAddToItemAuthoritative(effectType, prefabName, value, out assignment, out reason);
+            return GetTargetAccessors(effectType).TargetsField == null &&
+                   TryInvokeAddToItemAuthoritative(effectType, prefabName, value, out assignment, out reason);
         }
 
         if (targets is IDictionary dictionary)
@@ -2499,18 +2507,34 @@ internal static partial class WarfareCompat
                 return false;
             }
 
-            bool hadOriginalTarget = dictionary.Contains(prefabName);
-            int? originalValue = hadOriginalTarget && dictionary[prefabName] != null
-                ? Convert.ToInt32(dictionary[prefabName])
-                : null;
-            dictionary[prefabName] = value.Value;
-            assignment = new WarfareAppliedAssignment(effectType.FullName!, prefabName, true, hadOriginalTarget, originalValue, value);
-            return true;
+            try
+            {
+                bool hadOriginalTarget = dictionary.Contains(prefabName);
+                int? originalValue = hadOriginalTarget && dictionary[prefabName] != null
+                    ? Convert.ToInt32(dictionary[prefabName])
+                    : null;
+                dictionary[prefabName] = value.Value;
+                assignment = new WarfareAppliedAssignment(
+                    effectType.FullName!,
+                    prefabName,
+                    true,
+                    hadOriginalTarget,
+                    originalValue,
+                    value);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                reason = $"Could not update Warfare type '{effectType.FullName}' Targets dictionary: " +
+                         $"{GetInvocationErrorMessage(exception)}";
+                return false;
+            }
         }
 
         if (!TryInvokeSetTargetContains(targets!, prefabName, out bool hadHashTarget, out reason))
         {
-            return TryInvokeAddToItemAuthoritative(effectType, prefabName, value, out assignment, out reason);
+            return GetTargetSetAccessors(targets!.GetType()).ContainsMethod == null &&
+                   TryInvokeAddToItemAuthoritative(effectType, prefabName, value, out assignment, out reason);
         }
 
         if (value.HasValue)
@@ -2563,29 +2587,38 @@ internal static partial class WarfareCompat
                 return false;
             }
 
-            if (!dictionary.Contains(assignment.PrefabName))
+            try
             {
+                if (!dictionary.Contains(assignment.PrefabName))
+                {
+                    return true;
+                }
+
+                int? currentValue = dictionary[assignment.PrefabName] != null
+                    ? Convert.ToInt32(dictionary[assignment.PrefabName])
+                    : null;
+                if (currentValue != assignment.AppliedValue)
+                {
+                    return true;
+                }
+
+                if (assignment.HadOriginalTarget)
+                {
+                    dictionary[assignment.PrefabName] = assignment.OriginalValue ?? 0;
+                }
+                else
+                {
+                    dictionary.Remove(assignment.PrefabName);
+                }
+
                 return true;
             }
-
-            int? currentValue = dictionary[assignment.PrefabName] != null
-                ? Convert.ToInt32(dictionary[assignment.PrefabName])
-                : null;
-            if (currentValue != assignment.AppliedValue)
+            catch (Exception exception)
             {
-                return true;
+                reason = $"Could not restore Warfare type '{effectType.FullName}' Targets dictionary: " +
+                         $"{GetInvocationErrorMessage(exception)}";
+                return false;
             }
-
-            if (assignment.HadOriginalTarget)
-            {
-                dictionary[assignment.PrefabName] = assignment.OriginalValue ?? 0;
-            }
-            else
-            {
-                dictionary.Remove(assignment.PrefabName);
-            }
-
-            return true;
         }
 
         if (!TryInvokeSetTargetContains(targets!, assignment.PrefabName, out bool contains, out reason))
@@ -2634,7 +2667,16 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        targets = targetsField.GetValue(null);
+        try
+        {
+            targets = targetsField.GetValue(null);
+        }
+        catch (Exception exception)
+        {
+            reason = $"Could not read Warfare type '{effectType.FullName}' Targets field: {exception.Message}";
+            return false;
+        }
+
         if (targets == null)
         {
             reason = $"Warfare type '{effectType.FullName}' has a null Targets field.";
@@ -2656,8 +2698,17 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        contains = (bool)containsMethod.Invoke(targets, new object[] { prefabName });
-        return true;
+        try
+        {
+            contains = (bool)containsMethod.Invoke(targets, new object[] { prefabName });
+            return true;
+        }
+        catch (Exception exception)
+        {
+            reason = $"Could not query Warfare Targets type '{targetsType.FullName}': " +
+                     $"{GetInvocationErrorMessage(exception)}";
+            return false;
+        }
     }
 
     private static bool TryInvokeSetTargetAdd(object targets, string prefabName, out string reason)
@@ -2671,8 +2722,17 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        addMethod.Invoke(targets, new object[] { prefabName });
-        return true;
+        try
+        {
+            addMethod.Invoke(targets, new object[] { prefabName });
+            return true;
+        }
+        catch (Exception exception)
+        {
+            reason = $"Could not add to Warfare Targets type '{targetsType.FullName}': " +
+                     $"{GetInvocationErrorMessage(exception)}";
+            return false;
+        }
     }
 
     private static bool TryInvokeSetTargetRemove(object targets, string prefabName, out string reason)
@@ -2686,8 +2746,24 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        removeMethod.Invoke(targets, new object[] { prefabName });
-        return true;
+        try
+        {
+            removeMethod.Invoke(targets, new object[] { prefabName });
+            return true;
+        }
+        catch (Exception exception)
+        {
+            reason = $"Could not remove from Warfare Targets type '{targetsType.FullName}': " +
+                     $"{GetInvocationErrorMessage(exception)}";
+            return false;
+        }
+    }
+
+    private static string GetInvocationErrorMessage(Exception exception)
+    {
+        return exception is TargetInvocationException { InnerException: not null } invocationException
+            ? invocationException.InnerException.Message
+            : exception.Message;
     }
 
     private static bool TryInvokeAddToItem(
@@ -3023,19 +3099,47 @@ internal static partial class WarfareCompat
         public GameObject? OriginalSpawnOnHit { get; }
 
         public float OriginalSpawnOnHitChance { get; }
+
+        private GameObject? AppliedSpawnOnHit { get; set; }
+
+        private float AppliedSpawnOnHitChance { get; set; }
+
+        private bool HasAppliedValues { get; set; }
+
+        public void CaptureAppliedValues()
+        {
+            AppliedSpawnOnHit = Attack.m_spawnOnHit;
+            AppliedSpawnOnHitChance = Attack.m_spawnOnHitChance;
+            HasAppliedValues = true;
+        }
+
+        public void RestoreUnchangedValues()
+        {
+            if (Attack == null || !HasAppliedValues)
+            {
+                return;
+            }
+
+            if (Attack.m_spawnOnHit == AppliedSpawnOnHit &&
+                Mathf.Approximately(Attack.m_spawnOnHitChance, AppliedSpawnOnHitChance))
+            {
+                Attack.m_spawnOnHit = OriginalSpawnOnHit;
+                Attack.m_spawnOnHitChance = OriginalSpawnOnHitChance;
+            }
+        }
     }
 
     private sealed class WarfareAoeOverrideState
     {
         public WarfareAoeOverrideState(
             Aoe aoe,
-            HitData.DamageTypes originalDamage,
+            float originalLightningDamage,
             float originalRadius,
             float originalTtl,
             float originalHitInterval)
         {
             Aoe = aoe;
-            OriginalDamage = originalDamage;
+            OriginalLightningDamage = originalLightningDamage;
             OriginalRadius = originalRadius;
             OriginalTtl = originalTtl;
             OriginalHitInterval = originalHitInterval;
@@ -3043,13 +3147,88 @@ internal static partial class WarfareCompat
 
         public Aoe Aoe { get; }
 
-        public HitData.DamageTypes OriginalDamage { get; }
+        public float OriginalLightningDamage { get; }
 
         public float OriginalRadius { get; }
 
         public float OriginalTtl { get; }
 
         public float OriginalHitInterval { get; }
+
+        private float AppliedLightningDamage { get; set; }
+
+        private float AppliedRadius { get; set; }
+
+        private float AppliedTtl { get; set; }
+
+        private float AppliedHitInterval { get; set; }
+
+        private bool AppliesLightningDamage { get; set; }
+
+        private bool AppliesRadius { get; set; }
+
+        private bool AppliesTtl { get; set; }
+
+        private bool AppliesHitInterval { get; set; }
+
+        public void CaptureAppliedValues(
+            bool appliesLightningDamage,
+            bool appliesRadius,
+            bool appliesTtl,
+            bool appliesHitInterval)
+        {
+            if (appliesLightningDamage)
+            {
+                AppliesLightningDamage = true;
+                AppliedLightningDamage = Aoe.m_damage.m_lightning;
+            }
+
+            if (appliesRadius)
+            {
+                AppliesRadius = true;
+                AppliedRadius = Aoe.m_radius;
+            }
+
+            if (appliesTtl)
+            {
+                AppliesTtl = true;
+                AppliedTtl = Aoe.m_ttl;
+            }
+
+            if (appliesHitInterval)
+            {
+                AppliesHitInterval = true;
+                AppliedHitInterval = Aoe.m_hitInterval;
+            }
+        }
+
+        public void RestoreUnchangedValues()
+        {
+            if (Aoe == null)
+            {
+                return;
+            }
+
+            if (AppliesLightningDamage && Mathf.Approximately(Aoe.m_damage.m_lightning, AppliedLightningDamage))
+            {
+                Aoe.m_damage.m_lightning = OriginalLightningDamage;
+            }
+
+            if (AppliesRadius && Mathf.Approximately(Aoe.m_radius, AppliedRadius))
+            {
+                Aoe.m_radius = OriginalRadius;
+            }
+
+            if (AppliesTtl && Mathf.Approximately(Aoe.m_ttl, AppliedTtl))
+            {
+                Aoe.m_ttl = OriginalTtl;
+            }
+
+            if (AppliesHitInterval && Mathf.Approximately(Aoe.m_hitInterval, AppliedHitInterval))
+            {
+                Aoe.m_hitInterval = OriginalHitInterval;
+            }
+        }
     }
 
     private sealed class WarfareAttackStatusEffectOverrideState
@@ -3063,6 +3242,15 @@ internal static partial class WarfareCompat
         public ItemDrop ItemDrop { get; }
 
         public StatusEffect OriginalAttackStatusEffect { get; }
+
+        public void RestoreIfUnchanged()
+        {
+            ItemDrop.ItemData.SharedData? sharedData = ItemDrop?.m_itemData?.m_shared;
+            if (sharedData != null && sharedData.m_attackStatusEffect == null)
+            {
+                sharedData.m_attackStatusEffect = OriginalAttackStatusEffect;
+            }
+        }
     }
 
     private sealed class WarfareBleedTuning
@@ -3169,5 +3357,12 @@ internal static class CharacterDamageWarfareDotSourceDamagePatch
     private static void Postfix(WarfareDotSourceDamageScope __state)
     {
         WarfareCompat.EndWarfareDotSourceDamage(__state);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, WarfareDotSourceDamageScope __state)
+    {
+        WarfareCompat.EndWarfareDotSourceDamage(__state);
+
+        return __exception;
     }
 }

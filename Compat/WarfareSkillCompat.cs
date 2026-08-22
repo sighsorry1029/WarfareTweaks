@@ -32,19 +32,18 @@ internal static class WarfareSkillCompat
             ["ScytheVampiric_TW"] = Skills.SkillType.Polearms
         };
 
-    private static readonly Dictionary<string, Type> LoadedTypesByName = new(StringComparer.Ordinal);
     private static bool _hooksInstalled;
 
-    internal static void TryInstallHooks()
+    internal static void TryInstallHooks(Harmony harmony)
     {
         if (_hooksInstalled)
         {
             return;
         }
 
-        Type? fireProjectileBurstPatchType = FindLoadedType(WarfareFireProjectileBurstPatchTypeName);
-        Type? throwingStaminaPatchType = FindLoadedType(WarfareThrowingStaminaPatchTypeName);
-        Type? scythesStaminaPatchType = FindLoadedType(WarfareScythesStaminaPatchTypeName);
+        Type? fireProjectileBurstPatchType = WarfareTweaksCompat.FindLoadedType(WarfareFireProjectileBurstPatchTypeName);
+        Type? throwingStaminaPatchType = WarfareTweaksCompat.FindLoadedType(WarfareThrowingStaminaPatchTypeName);
+        Type? scythesStaminaPatchType = WarfareTweaksCompat.FindLoadedType(WarfareScythesStaminaPatchTypeName);
         if (fireProjectileBurstPatchType == null &&
             throwingStaminaPatchType == null &&
             scythesStaminaPatchType == null)
@@ -52,7 +51,6 @@ internal static class WarfareSkillCompat
             return;
         }
 
-        Harmony harmony = new("sighsorry.WarfareTweaks.WarfareSkillCompat");
         int patchedCount = 0;
 
         MethodInfo? modifyMethod = fireProjectileBurstPatchType != null
@@ -60,10 +58,14 @@ internal static class WarfareSkillCompat
             : null;
         if (modifyMethod != null)
         {
-            harmony.Patch(
-                modifyMethod,
-                prefix: new HarmonyMethod(typeof(WarfareSkillCompat), nameof(ReplaceWarfareThrowingProjectileSkillPrefix)));
-            patchedCount++;
+            if (WarfareTweaksCompat.TryPatch(
+                    harmony,
+                    modifyMethod,
+                    "Warfare throwing projectile skill",
+                    prefix: new HarmonyMethod(typeof(WarfareSkillCompat), nameof(ReplaceWarfareThrowingProjectileSkillPrefix))))
+            {
+                patchedCount++;
+            }
         }
 
         patchedCount += TrySuppressWarfareStaminaPostfix(harmony, throwingStaminaPatchType);
@@ -77,6 +79,11 @@ internal static class WarfareSkillCompat
         _hooksInstalled = true;
         WarfareTweaksPlugin.ModLogger.LogInfo(
             $"Installed {patchedCount} Warfare skill compatibility hook(s); Throwing/Scythes gameplay bonuses are replaced with vanilla skill assignments.");
+    }
+
+    internal static void ResetHookState()
+    {
+        _hooksInstalled = false;
     }
 
     internal static void ApplyToObjectDb(ObjectDB objectDb)
@@ -127,10 +134,13 @@ internal static class WarfareSkillCompat
             return 0;
         }
 
-        harmony.Patch(
+        return WarfareTweaksCompat.TryPatch(
+            harmony,
             postfixMethod,
-            prefix: new HarmonyMethod(typeof(WarfareSkillCompat), nameof(SuppressWarfareSkillPostfixPrefix)));
-        return 1;
+            "Warfare custom skill suppression",
+            prefix: new HarmonyMethod(typeof(WarfareSkillCompat), nameof(SuppressWarfareSkillPostfixPrefix)))
+            ? 1
+            : 0;
     }
 
     private static bool ReplaceWarfareThrowingProjectileSkillPrefix(
@@ -178,32 +188,6 @@ internal static class WarfareSkillCompat
 
         skillType = Skills.SkillType.None;
         return false;
-    }
-
-    private static Type? FindLoadedType(string fullTypeName)
-    {
-        string typeName = fullTypeName?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            return null;
-        }
-
-        if (LoadedTypesByName.TryGetValue(typeName, out Type? cachedType))
-        {
-            return cachedType;
-        }
-
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            Type? type = assembly.GetType(typeName, throwOnError: false);
-            if (type != null)
-            {
-                LoadedTypesByName[typeName] = type;
-                return type;
-            }
-        }
-
-        return null;
     }
 
     internal static bool IsHiddenWarfareSkill(Skills.SkillType skillType)

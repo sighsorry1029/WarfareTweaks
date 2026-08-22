@@ -1,4 +1,5 @@
 | `Version` | `Update Notes`    |
 |-----------|-------------------|
+| 1.0.2     | - Added the missing `sfx_bow_fire_TW` firing sound to Warfare greatbows without duplicating existing trigger effects. <br> - Simplified throwable recipe, durability, prefab-name, type lookup, and warning paths while removing duplicate application work. <br> - Made YAML reapplication, native assignment restoration, dynamic Harmony hooks, direct-hit scopes, external compatibility bridges, and Warfare transpilers fail safely without overwriting later mod changes. <br> - Made game-folder DLL deployment opt-in while preserving the Release packaging flow. |
 | 1.0.1     | - Made WarfareTweaks.yml reload atomic: invalid or empty edits keep the last valid configuration, while legacy no-op fields are reported and ignored. <br> - Reduced the configuration and runtime surface, tightened Harmony and throwable compatibility, simplified localization and ObjectDB sync, and added warnings when Warfare transpiler targets change. |
 | 1.0.0     | - Initial Release |

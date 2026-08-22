@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
@@ -80,8 +81,11 @@ internal static class ProjectileOnHitWarfareTweaksPatch
     [HarmonyPriority(Priority.First)]
     private static void Prefix(Projectile __instance, out ProjectileHitContextScope __state)
     {
+        WarfareTweaksProjectileHitContext.Scope projectileScope =
+            WarfareTweaksProjectileHitContext.Begin(__instance);
+        __state = new ProjectileHitContextScope(projectileScope, default);
         __state = new ProjectileHitContextScope(
-            WarfareTweaksProjectileHitContext.Begin(__instance),
+            projectileScope,
             DirectWeaponHitContextSystem.BeginProjectileHit(__instance));
         WarfareThrowableCompat.PrepareProjectileIfNeeded(__instance);
     }
@@ -91,6 +95,14 @@ internal static class ProjectileOnHitWarfareTweaksPatch
     {
         DirectWeaponHitContextSystem.End(__state.DirectHitScope);
         WarfareTweaksProjectileHitContext.End(__state.ProjectileScope);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, ProjectileHitContextScope __state)
+    {
+        DirectWeaponHitContextSystem.End(__state.DirectHitScope);
+        WarfareTweaksProjectileHitContext.End(__state.ProjectileScope);
+
+        return __exception;
     }
 
     private readonly struct ProjectileHitContextScope
@@ -192,15 +204,22 @@ internal static class HumanoidStartAttackWarfareThrowablePatch
 internal static class AttackOnAttackTriggerWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static void Prefix(Attack __instance, out bool __state)
+    private static void Prefix(Attack __instance, out int __state)
     {
         __state = WarfareThrowableCompat.BeginInventoryRemovalPreservation(__instance);
     }
 
     [HarmonyPriority(Priority.Last)]
-    private static void Postfix(bool __state)
+    private static void Postfix(int __state)
     {
         WarfareThrowableCompat.EndInventoryRemovalPreservation(__state);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, int __state)
+    {
+        WarfareThrowableCompat.EndInventoryRemovalPreservation(__state);
+
+        return __exception;
     }
 }
 
@@ -220,7 +239,7 @@ internal static class AttackUseAmmoWarfareThrowablePatch
     [HarmonyPriority(Priority.First)]
     private static bool Prefix(Attack __instance, ref bool __result, ref ItemDrop.ItemData ammoItem)
     {
-        if (!WarfareThrowableCompat.ShouldSkipAmmoConsumption(__instance))
+        if (!WarfareThrowableCompat.ShouldPreserveWeaponOnConsume(__instance))
         {
             return true;
         }

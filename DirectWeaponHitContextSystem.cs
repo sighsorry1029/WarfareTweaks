@@ -1,3 +1,4 @@
+using System;
 using HarmonyLib;
 
 namespace WarfareTweaks;
@@ -25,7 +26,7 @@ internal static class DirectWeaponHitContextSystem
         string previousWeaponPrefabName = _weaponPrefabName;
         _weaponPrefabName = GetWeaponPrefabName(attack.m_weapon);
         _directHitDepth++;
-        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName);
+        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName, _directHitDepth, _characterDamageDepth);
     }
 
     internal static Scope BeginProjectileHit(Projectile projectile)
@@ -41,22 +42,37 @@ internal static class DirectWeaponHitContextSystem
         ItemDrop.ItemData? weapon = ProjectileAccess.GetWeapon(projectile);
         _weaponPrefabName = GetWeaponPrefabName(weapon);
         _directHitDepth++;
-        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName);
+        return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName, _directHitDepth, _characterDamageDepth);
     }
 
     internal static Scope BeginCharacterDamage()
     {
         _characterDamageDepth++;
-        if (_directHitDepth == 0 &&
-            WarfareTweaksBridge.TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName))
+        try
         {
-            string previousWeaponPrefabName = _weaponPrefabName;
-            _weaponPrefabName = weaponPrefabName;
-            _directHitDepth++;
-            return new Scope(ScopeKind.CharacterDamageWithExternalDirectHit, previousWeaponPrefabName);
-        }
+            if (_directHitDepth == 0 &&
+                WarfareTweaksBridge.TryGetCaptainValheimShieldHitWeaponPrefabName(out string weaponPrefabName))
+            {
+                string previousWeaponPrefabName = _weaponPrefabName;
+                _weaponPrefabName = weaponPrefabName;
+                _directHitDepth++;
+                return new Scope(
+                    ScopeKind.CharacterDamageWithExternalDirectHit,
+                    previousWeaponPrefabName,
+                    _directHitDepth,
+                    _characterDamageDepth);
+            }
 
-        return new Scope(ScopeKind.CharacterDamage);
+            return new Scope(
+                ScopeKind.CharacterDamage,
+                directHitDepth: _directHitDepth,
+                characterDamageDepth: _characterDamageDepth);
+        }
+        catch
+        {
+            _characterDamageDepth--;
+            throw;
+        }
     }
 
     internal static bool TryGetCurrentWeaponPrefabName(out string prefabName)
@@ -74,21 +90,21 @@ internal static class DirectWeaponHitContextSystem
     {
         switch (scope.Kind)
         {
-            case ScopeKind.DirectHit when _directHitDepth > 0:
+            case ScopeKind.DirectHit when _directHitDepth == scope.DirectHitDepth:
                 _directHitDepth--;
                 _weaponPrefabName = scope.PreviousWeaponPrefabName;
 
                 break;
-            case ScopeKind.CharacterDamage when _characterDamageDepth > 0:
+            case ScopeKind.CharacterDamage when _characterDamageDepth == scope.CharacterDamageDepth:
                 _characterDamageDepth--;
                 break;
             case ScopeKind.CharacterDamageWithExternalDirectHit:
-                if (_characterDamageDepth > 0)
+                if (_characterDamageDepth == scope.CharacterDamageDepth)
                 {
                     _characterDamageDepth--;
                 }
 
-                if (_directHitDepth > 0)
+                if (_directHitDepth == scope.DirectHitDepth)
                 {
                     _directHitDepth--;
                     _weaponPrefabName = scope.PreviousWeaponPrefabName;
@@ -100,15 +116,25 @@ internal static class DirectWeaponHitContextSystem
 
     internal readonly struct Scope
     {
-        internal Scope(ScopeKind kind, string previousWeaponPrefabName = "")
+        internal Scope(
+            ScopeKind kind,
+            string previousWeaponPrefabName = "",
+            int directHitDepth = 0,
+            int characterDamageDepth = 0)
         {
             Kind = kind;
             PreviousWeaponPrefabName = previousWeaponPrefabName;
+            DirectHitDepth = directHitDepth;
+            CharacterDamageDepth = characterDamageDepth;
         }
 
         internal ScopeKind Kind { get; }
 
         internal string PreviousWeaponPrefabName { get; }
+
+        internal int DirectHitDepth { get; }
+
+        internal int CharacterDamageDepth { get; }
     }
 
     internal enum ScopeKind
@@ -134,6 +160,13 @@ internal static class AttackDoMeleeAttackDirectWeaponHitPatch
     {
         DirectWeaponHitContextSystem.End(__state);
     }
+
+    private static Exception? Finalizer(Exception? __exception, DirectWeaponHitContextSystem.Scope __state)
+    {
+        DirectWeaponHitContextSystem.End(__state);
+
+        return __exception;
+    }
 }
 
 [HarmonyPatch(typeof(Attack), nameof(Attack.DoAreaAttack))]
@@ -150,6 +183,13 @@ internal static class AttackDoAreaAttackDirectWeaponHitPatch
     {
         DirectWeaponHitContextSystem.End(__state);
     }
+
+    private static Exception? Finalizer(Exception? __exception, DirectWeaponHitContextSystem.Scope __state)
+    {
+        DirectWeaponHitContextSystem.End(__state);
+
+        return __exception;
+    }
 }
 
 [HarmonyPatch(typeof(Character), nameof(Character.Damage))]
@@ -165,5 +205,12 @@ internal static class CharacterDamageDirectWeaponHitDepthPatch
     private static void Postfix(DirectWeaponHitContextSystem.Scope __state)
     {
         DirectWeaponHitContextSystem.End(__state);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, DirectWeaponHitContextSystem.Scope __state)
+    {
+        DirectWeaponHitContextSystem.End(__state);
+
+        return __exception;
     }
 }
