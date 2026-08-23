@@ -29,6 +29,7 @@ internal static partial class WarfareCompat
     private static readonly Dictionary<string, ConfiguredWarfareEffectLookup> ConfiguredEffectsByPrefabAndEffectId = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<Type, WarfareTargetAccessors> TargetAccessorsByEffectType = new();
     private static readonly Dictionary<Type, WarfareTargetSetAccessors> TargetSetAccessorsByType = new();
+    private static readonly int WarfarePinnedHash = "Warfare_Pinned".GetStableHashCode();
     private static readonly int WarfareHasteStackingHash = "Warfare_Haste_Stacking".GetStableHashCode();
     private static readonly int WarfareFireAndIceHasteStackingHash = "WarfareFireAndIce_Haste_Stacking".GetStableHashCode();
     private const float WarfareSourceDamageDotDuration = 10f;
@@ -189,6 +190,11 @@ internal static partial class WarfareCompat
         int patchedCount = TryInstallAttackWeaponContextHook(harmony);
         patchedCount += TryInstallBuiltInDirectHitGateHooks(harmony);
         patchedCount += TryInstallAddToItemGateHooks(harmony);
+        patchedCount += TryPatchWarfareMethod(
+            harmony,
+            $"{WarfareStatusEffectsNamespace}.Pinned+SE_Warfare_Pinned",
+            "OnEnable",
+            postfixName: nameof(WarfarePinnedStatusOnEnablePostfix));
         patchedCount += TryInstallBleedingTuningHooks(harmony);
         patchedCount += TryInstallFixedDamageTuningHooks(harmony);
         patchedCount += TryInstallHasteTuningHooks(harmony);
@@ -899,6 +905,20 @@ internal static partial class WarfareCompat
         status.m_ttl = Mathf.Max(0.01f, tuning.StackWindow.Value);
     }
 
+    private static void WarfarePinnedStatusOnEnablePostfix(object __instance)
+    {
+        if (__instance is not StatusEffect status ||
+            status.m_startEffects?.m_effectPrefabs is not { } effects ||
+            !Array.Exists(effects, effect => effect == null || effect.m_prefab == null))
+        {
+            return;
+        }
+
+        status.m_startEffects.m_effectPrefabs = Array.FindAll(
+            effects,
+            effect => effect != null && effect.m_prefab != null);
+    }
+
     private static bool WarfareBleedingStackStatusSetLevelPrefix(object __instance, int itemLevel)
     {
         if (__instance is not StatusEffect status ||
@@ -1331,10 +1351,16 @@ internal static partial class WarfareCompat
         return vanillaValue;
     }
 
-    internal static void ApplyWarfareHasteSpeedModifier(SEMan seMan, ref float speed)
+    internal static void ApplyWarfareSpeedModifiers(SEMan seMan, ref float speed)
     {
         if (seMan == null)
         {
+            return;
+        }
+
+        if (seMan.GetStatusEffect(WarfarePinnedHash) != null)
+        {
+            speed = 0f;
             return;
         }
 

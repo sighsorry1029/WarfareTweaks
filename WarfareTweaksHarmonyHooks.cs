@@ -46,12 +46,12 @@ internal static class ZNetSceneAwakeWarfareTweaksPatch
 }
 
 [HarmonyPatch(typeof(SEMan), nameof(SEMan.ApplyStatusEffectSpeedMods))]
-internal static class SeManApplyStatusEffectSpeedModsWarfareHastePatch
+internal static class SeManApplyStatusEffectSpeedModsWarfareEffectsPatch
 {
     [HarmonyPriority(Priority.Last)]
     private static void Postfix(SEMan __instance, ref float speed)
     {
-        WarfareCompat.ApplyWarfareHasteSpeedModifier(__instance, ref speed);
+        WarfareCompat.ApplyWarfareSpeedModifiers(__instance, ref speed);
     }
 }
 
