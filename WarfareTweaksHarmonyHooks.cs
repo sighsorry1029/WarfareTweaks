@@ -254,9 +254,9 @@ internal static class AttackUseAmmoWarfareThrowablePatch
 internal static class InventoryRemoveItemWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
+    private static bool Prefix(Inventory __instance, ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(__instance, item))
         {
             return true;
         }
@@ -270,9 +270,9 @@ internal static class InventoryRemoveItemWarfareThrowablePatch
 internal static class InventoryRemoveItemAmountWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
+    private static bool Prefix(Inventory __instance, ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(__instance, item))
         {
             return true;
         }
@@ -286,9 +286,9 @@ internal static class InventoryRemoveItemAmountWarfareThrowablePatch
 internal static class InventoryRemoveOneItemWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
+    private static bool Prefix(Inventory __instance, ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(__instance, item))
         {
             return true;
         }
@@ -302,9 +302,34 @@ internal static class InventoryRemoveOneItemWarfareThrowablePatch
 internal static class HumanoidUnequipItemWarfareThrowableAttackPatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item)
+    private static bool Prefix(Humanoid __instance, ItemDrop.ItemData item)
     {
-        return !WarfareThrowableCompat.ShouldBlockInventoryRemoval(item, allowBrokenUnequip: true);
+        return !WarfareThrowableCompat.ShouldBlockInventoryRemoval(__instance.GetInventory(), item, allowBrokenUnequip: true);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "DrainEquipedItemDurability", new[] { typeof(ItemDrop.ItemData), typeof(float) })]
+internal static class HumanoidDrainEquipedItemDurabilityWarfareThrowablePatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(
+        Humanoid __instance,
+        ItemDrop.ItemData item,
+        out WarfareThrowableCompat.BrokenRemovalScope __state)
+    {
+        __state = WarfareThrowableCompat.BeginBrokenRemovalPreservation(__instance.GetInventory(), item);
+    }
+
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix(WarfareThrowableCompat.BrokenRemovalScope __state)
+    {
+        WarfareThrowableCompat.EndBrokenRemovalPreservation(__state);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, WarfareThrowableCompat.BrokenRemovalScope __state)
+    {
+        WarfareThrowableCompat.EndBrokenRemovalPreservation(__state);
+        return __exception;
     }
 }
 
@@ -312,9 +337,9 @@ internal static class HumanoidUnequipItemWarfareThrowableAttackPatch
 internal static class HumanoidConsumeItemWarfareThrowablePatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(ItemDrop.ItemData item, ref bool __result)
+    private static bool Prefix(Inventory inventory, ItemDrop.ItemData item, ref bool __result)
     {
-        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(item))
+        if (!WarfareThrowableCompat.ShouldBlockInventoryRemoval(inventory, item))
         {
             return true;
         }

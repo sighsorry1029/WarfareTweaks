@@ -29,12 +29,13 @@ internal static partial class WarfareCompat
 
         HashSet<string> nativeTooltipEffectIds = GetNativeTooltipEffectIds(item, prefabName);
         List<string> fallbackBlocks = new();
+        string[]? normalizedTooltipLines = null;
         foreach (ConfiguredWarfareEffectLookup configuredEffect in configuredEffects)
         {
             string? block = null;
             WarfareBuiltInEffectRegistration registration = configuredEffect.Registration;
             if (!nativeTooltipEffectIds.Contains(registration.Id) &&
-                ShouldAppendFallbackTooltip(registration, tooltip))
+                ShouldAppendFallbackTooltip(registration, normalizedTooltipLines ??= NormalizeTooltipLines(tooltip)))
             {
                 block = BuildConfiguredFallbackTooltip(
                     registration,
@@ -298,45 +299,50 @@ internal static partial class WarfareCompat
             return;
         }
 
+        if (ItemPrefabNamesBySharedData.TryGetValue(sharedData, out string cachedPrefabName) &&
+            string.Equals(cachedPrefabName, prefabName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         ItemPrefabNamesBySharedData.Remove(sharedData);
         ItemPrefabNamesBySharedData.Add(sharedData, prefabName);
     }
 
-    private static bool ShouldAppendFallbackTooltip(WarfareBuiltInEffectRegistration registration, string tooltip)
+    private static bool ShouldAppendFallbackTooltip(WarfareBuiltInEffectRegistration registration, string[] normalizedTooltipLines)
     {
-        return !TooltipContainsAny(tooltip, GetFallbackTooltipNeedles(registration.Id));
+        return !TooltipContainsAny(normalizedTooltipLines, GetFallbackTooltipNeedles(registration.Id));
     }
 
-    private static bool TooltipContainsAny(string tooltip, params string[] needles)
+    private static string[] NormalizeTooltipLines(string tooltip)
     {
-        if (string.IsNullOrWhiteSpace(tooltip) || needles.Length == 0)
-        {
-            return false;
-        }
-
         string[] lines = tooltip
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
             .Split('\n');
-
-        foreach (string line in lines)
+        for (int i = 0; i < lines.Length; i++)
         {
-            string normalizedLine = StripRichTextTags(line).Trim();
-            if (string.IsNullOrWhiteSpace(normalizedLine))
+            lines[i] = StripRichTextTags(lines[i]).Trim();
+        }
+
+        return lines;
+    }
+
+    private static bool TooltipContainsAny(string[] normalizedTooltipLines, params string[] needles)
+    {
+        foreach (string needle in needles)
+        {
+            string normalizedNeedle = StripRichTextTags(needle).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedNeedle))
             {
                 continue;
             }
 
-            foreach (string needle in needles)
+            string needlePrefix = normalizedNeedle + ":";
+            foreach (string normalizedLine in normalizedTooltipLines)
             {
-                string normalizedNeedle = StripRichTextTags(needle).Trim();
-                if (string.IsNullOrWhiteSpace(normalizedNeedle))
-                {
-                    continue;
-                }
-
                 if (normalizedLine.Equals(normalizedNeedle, StringComparison.OrdinalIgnoreCase) ||
-                    normalizedLine.StartsWith(normalizedNeedle + ":", StringComparison.OrdinalIgnoreCase))
+                    normalizedLine.StartsWith(needlePrefix, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
@@ -661,24 +667,6 @@ internal static partial class WarfareCompat
         }
 
         return result;
-    }
-
-    private static float ResolveConfiguredHasteMoveSpeedMultiplier(
-        EffectBehaviorConfig effectConfig,
-        EffectBehaviorOverrideConfig? prefabOverride,
-        float defaultValue)
-    {
-        if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
-        {
-            return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
-        }
-
-        if (!Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f))
-        {
-            return Mathf.Max(0f, effectConfig.MoveSpeedMultiplier);
-        }
-
-        return defaultValue;
     }
 
     private static string FormatNumber(float value)

@@ -1578,6 +1578,24 @@ internal static partial class WarfareCompat
             defaultValue);
     }
 
+    private static float ResolveConfiguredHasteMoveSpeedMultiplier(
+        EffectBehaviorConfig effectConfig,
+        EffectBehaviorOverrideConfig? prefabOverride,
+        float defaultValue)
+    {
+        if (prefabOverride?.MoveSpeedMultiplier.HasValue == true)
+        {
+            return Mathf.Max(0f, prefabOverride.MoveSpeedMultiplier.Value);
+        }
+
+        if (!Mathf.Approximately(effectConfig.MoveSpeedMultiplier, 1f))
+        {
+            return Mathf.Max(0f, effectConfig.MoveSpeedMultiplier);
+        }
+
+        return defaultValue;
+    }
+
     private static bool TryGetCurrentAttackWeaponPrefabName(out string prefabName)
     {
         if (DirectWeaponHitContextSystem.TryGetCurrentWeaponPrefabName(out prefabName))
@@ -2427,7 +2445,7 @@ internal static partial class WarfareCompat
 
         foreach (string prefabName in prefabNames)
         {
-            if (TrySuppressNativeAttackStatusEffect(objectDb, prefabName, IsWarfareNativeAttackStatusEffect))
+            if (TrySuppressNativeAttackStatusEffect(objectDb, prefabName))
             {
                 removedCount++;
             }
@@ -2438,8 +2456,7 @@ internal static partial class WarfareCompat
 
     private static bool TrySuppressNativeAttackStatusEffect(
         ObjectDB objectDb,
-        string prefabName,
-        Func<StatusEffect, bool> shouldSuppress)
+        string prefabName)
     {
         GameObject prefab = objectDb.GetItemPrefab(prefabName);
         if (prefab == null)
@@ -2454,7 +2471,7 @@ internal static partial class WarfareCompat
         }
 
         StatusEffect? attackStatusEffect = itemDrop.m_itemData.m_shared.m_attackStatusEffect;
-        if (attackStatusEffect == null || !shouldSuppress(attackStatusEffect))
+        if (attackStatusEffect == null || !IsWarfareNativeAttackStatusEffect(attackStatusEffect))
         {
             return false;
         }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace WarfareTweaks;
@@ -16,14 +15,12 @@ internal static class WarfareThrowableCompat
     private const float DefaultMaxDurability = 100f;
     private const float DefaultUseDurabilityDrain = 1f;
     private const string DurabilityInitializedKey = "WarfareTweaks_WarfareThrowableDurabilityInitialized";
-    private const float BrokenRemovalPreservationSeconds = 5f;
 
     private static readonly Skills.SkillType ThrowingSkillType =
         (Skills.SkillType)Math.Abs(ThrowingSkillName.GetStableHashCode());
     private static readonly HashSet<string> PatchedWeaponPrefabNames = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> PatchedWeaponSharedNames = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> PatchedProjectilePrefabNames = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly ConditionalWeakTable<ItemDrop.ItemData, BrokenRemovalPreservationState> BrokenRemovalPreservations = new();
     private static readonly Dictionary<string, Recipe> RecipesByPrefabOrSharedName = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, GameObject> DropPrefabsBySharedName = new(StringComparer.OrdinalIgnoreCase);
     private static ObjectDB? _cachedRecipeObjectDb;
@@ -43,6 +40,13 @@ internal static class WarfareThrowableCompat
 
     [ThreadStatic]
     private static int InventoryRemovalPreservationDepth;
+
+    [ThreadStatic]
+    private static Inventory? BrokenRemovalInventory;
+    [ThreadStatic]
+    private static ItemDrop.ItemData? BrokenRemovalItem;
+    [ThreadStatic]
+    private static int BrokenRemovalPreservationDepth;
 
     // ObjectDB/ZNetScene patching keeps prefab and recipe normalization together.
     internal static void ApplyToObjectDb(ObjectDB objectDb)
@@ -272,11 +276,11 @@ internal static class WarfareThrowableCompat
     }
 
     // Attack and inventory guards preserve throwable durability semantics.
-    internal static void PrepareAttackForUse(Attack? attack)
+    private static bool TryPrepareAttackForUse(Attack? attack)
     {
         if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
         {
-            return;
+            return false;
         }
 
         ConfigureWeaponDurability(attack.m_weapon);
@@ -284,27 +288,21 @@ internal static class WarfareThrowableCompat
         attack.m_consumeItem = false;
         attack.m_ammoItem = null;
         attack.m_lastUsedAmmo = null;
+        return true;
     }
 
     internal static bool ShouldPreserveWeaponOnConsume(Attack? attack)
     {
-        if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
-        {
-            return false;
-        }
-
-        PrepareAttackForUse(attack);
-        return true;
+        return TryPrepareAttackForUse(attack);
     }
 
     internal static int BeginInventoryRemovalPreservation(Attack? attack)
     {
-        if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
+        if (!TryPrepareAttackForUse(attack))
         {
             return 0;
         }
 
-        PrepareAttackForUse(attack);
         return ++InventoryRemovalPreservationDepth;
     }
 
@@ -318,18 +316,49 @@ internal static class WarfareThrowableCompat
         InventoryRemovalPreservationDepth--;
     }
 
+    internal static BrokenRemovalScope BeginBrokenRemovalPreservation(Inventory? inventory, ItemDrop.ItemData? item)
+    {
+        if (inventory == null || item?.m_shared?.m_destroyBroken != true)
+        {
+            return default;
+        }
+
+        BrokenRemovalScope scope = new(
+            ++BrokenRemovalPreservationDepth,
+            BrokenRemovalInventory,
+            BrokenRemovalItem);
+        BrokenRemovalInventory = inventory;
+        BrokenRemovalItem = item;
+        return scope;
+    }
+
+    internal static void EndBrokenRemovalPreservation(BrokenRemovalScope scope)
+    {
+        if (scope.DepthToken <= 0 || BrokenRemovalPreservationDepth != scope.DepthToken)
+        {
+            return;
+        }
+
+        BrokenRemovalPreservationDepth--;
+        BrokenRemovalInventory = scope.PreviousInventory;
+        BrokenRemovalItem = scope.PreviousItem;
+    }
+
     internal static bool ShouldBlockInventoryRemoval(
+        Inventory? inventory,
         ItemDrop.ItemData? item,
         bool allowBrokenUnequip = false)
     {
-        bool recognized = IsWarfareThrowableWeapon(item);
-        bool preserveBrokenRemoval = recognized && ShouldPreserveBrokenRemoval(item);
-        if (preserveBrokenRemoval && allowBrokenUnequip)
+        // Only the current automatic break cleanup may preserve this exact inventory item.
+        // A later drop or transfer must perform its real removal, even when the item is still broken.
+        if (BrokenRemovalPreservationDepth > 0 &&
+            ReferenceEquals(inventory, BrokenRemovalInventory) &&
+            ReferenceEquals(item, BrokenRemovalItem))
         {
-            return false;
+            return !allowBrokenUnequip && IsWarfareThrowableWeapon(item);
         }
 
-        if ((InventoryRemovalPreservationDepth <= 0 && !preserveBrokenRemoval) || !recognized)
+        if (InventoryRemovalPreservationDepth <= 0 || !IsWarfareThrowableWeapon(item))
         {
             return false;
         }
@@ -345,12 +374,11 @@ internal static class WarfareThrowableCompat
 
     internal static ProjectileDurabilityDrainState CaptureProjectileDurabilityDrain(Attack attack)
     {
-        if (attack?.m_character is not Player || !IsWarfareThrowableWeapon(attack.m_weapon))
+        if (attack?.m_character is not Player || !TryPrepareAttackForUse(attack))
         {
             return ProjectileDurabilityDrainState.Empty;
         }
 
-        PrepareAttackForUse(attack);
         ItemDrop.ItemData weapon = attack.m_weapon;
         return new ProjectileDurabilityDrainState(weapon, weapon.m_durability);
     }
@@ -365,12 +393,10 @@ internal static class WarfareThrowableCompat
         ItemDrop.ItemData weapon = state.Weapon;
         if (weapon.m_durability < state.BeforeDurability - 0.001f)
         {
-            MarkBrokenRemovalPreservationIfNeeded(weapon);
             return;
         }
 
         weapon.m_durability = Mathf.Max(0f, weapon.m_durability - GetDurabilityDrain(weapon));
-        MarkBrokenRemovalPreservationIfNeeded(weapon);
     }
 
     // Prefab mutation helpers are shared by ObjectDB setup and runtime attack repair.
@@ -775,13 +801,15 @@ internal static class WarfareThrowableCompat
                     continue;
                 }
 
-                requirements.Add(new Piece.Requirement
+                Piece.Requirement addedRequirement = new()
                 {
                     m_resItem = templateRequirement.m_resItem,
                     m_amount = 0,
                     m_amountPerLevel = templateRequirement.m_amountPerLevel,
                     m_recover = templateRequirement.m_recover
-                });
+                };
+                requirements.Add(addedRequirement);
+                templateHandledRequirements.Add(addedRequirement);
                 changed = true;
                 continue;
             }
@@ -959,46 +987,6 @@ internal static class WarfareThrowableCompat
     {
         float drain = weapon.m_shared.m_useDurabilityDrain;
         return drain > 0f ? drain : DefaultUseDurabilityDrain;
-    }
-
-    private static void MarkBrokenRemovalPreservationIfNeeded(ItemDrop.ItemData weapon)
-    {
-        if (weapon.m_durability > 0.001f)
-        {
-            BrokenRemovalPreservations.Remove(weapon);
-            return;
-        }
-
-        float expiresAt = Time.time + BrokenRemovalPreservationSeconds;
-        BrokenRemovalPreservations.Remove(weapon);
-        BrokenRemovalPreservations.Add(weapon, new BrokenRemovalPreservationState(expiresAt));
-    }
-
-    private static bool ShouldPreserveBrokenRemoval(ItemDrop.ItemData? item)
-    {
-        if (item == null)
-        {
-            return false;
-        }
-
-        if (item.m_durability > 0.001f)
-        {
-            BrokenRemovalPreservations.Remove(item);
-            return false;
-        }
-
-        if (!BrokenRemovalPreservations.TryGetValue(item, out BrokenRemovalPreservationState? state))
-        {
-            return false;
-        }
-
-        if (Time.time > state.ExpiresAt)
-        {
-            BrokenRemovalPreservations.Remove(item);
-            return false;
-        }
-
-        return true;
     }
 
     // Recognition helpers intentionally accept both patched prefabs and copied item instances.
@@ -1180,14 +1168,23 @@ internal static class WarfareThrowableCompat
                name.IndexOf(ThrowableSharedNameToken, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private sealed class BrokenRemovalPreservationState
+    internal readonly struct BrokenRemovalScope
     {
-        public BrokenRemovalPreservationState(float expiresAt)
+        internal BrokenRemovalScope(
+            int depthToken,
+            Inventory? previousInventory,
+            ItemDrop.ItemData? previousItem)
         {
-            ExpiresAt = expiresAt;
+            DepthToken = depthToken;
+            PreviousInventory = previousInventory;
+            PreviousItem = previousItem;
         }
 
-        public float ExpiresAt { get; }
+        internal int DepthToken { get; }
+
+        internal Inventory? PreviousInventory { get; }
+
+        internal ItemDrop.ItemData? PreviousItem { get; }
     }
 
     internal readonly struct ProjectileDurabilityDrainState

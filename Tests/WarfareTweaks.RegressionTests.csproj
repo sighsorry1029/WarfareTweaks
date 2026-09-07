@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <Compile Include="../WarfareTweaksConfigLoader.cs" Link="Production/WarfareTweaksConfigLoader.cs" />
+    <Compile Include="../WarfareTweaksConfigModels.cs" Link="Production/WarfareTweaksConfigModels.cs" />
+    <Compile Include="../WarfareTweaksWarningLog.cs" Link="Production/WarfareTweaksWarningLog.cs" />
+    <EmbeddedResource Include="../Resources/Defaults/WarfareTweaks.yml" LogicalName="WarfareTweaks.Resources.Defaults.WarfareTweaks.yml" />
+  </ItemGroup>
+</Project>

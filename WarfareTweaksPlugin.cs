@@ -17,7 +17,7 @@ namespace WarfareTweaks;
 public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 {
     internal const string ModName = "WarfareTweaks";
-    internal const string ModVersion = "1.0.3";
+    internal const string ModVersion = "1.0.4";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string WarfareYamlFileName = "WarfareTweaks.yml";
@@ -165,9 +165,16 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
             return false;
         }
 
-        if (!TryApplyYamlText(yamlText, applyToWorld))
+        if (!WarfareTweaksConfigLoader.TryParse(yamlText, out Dictionary<string, EffectBehaviorConfig> parsedEffects))
         {
             return false;
+        }
+
+        // A connected client's local file is only its disconnect fallback. ServerSync
+        // keeps that value separately; applying it here would bypass server authority.
+        if (ConfigSync.IsSourceOfTruth)
+        {
+            ApplyParsedEffects(parsedEffects, applyToWorld);
         }
 
         PublishSyncedYaml(yamlText);
@@ -207,11 +214,17 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
             return false;
         }
 
+        ApplyParsedEffects(parsedEffects, applyToWorld);
+        return true;
+    }
+
+    private static void ApplyParsedEffects(Dictionary<string, EffectBehaviorConfig> parsedEffects, bool applyToWorld)
+    {
         _currentEffects = parsedEffects;
         WarfareCompat.RebuildBuiltInEffects(_currentEffects);
         if (!applyToWorld)
         {
-            return true;
+            return;
         }
 
         if (ObjectDB.instance != null)
@@ -223,7 +236,6 @@ public sealed class WarfareTweaksPlugin : BaseUnityPlugin
         }
 
         ModLogger.LogInfo("WarfareTweaks YAML reload complete.");
-        return true;
     }
 
     private static void ApplyEmbeddedDefaultConfig()

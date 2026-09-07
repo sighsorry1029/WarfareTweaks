@@ -110,13 +110,7 @@ internal static class ChainLightningDedupSystem
 
         int targetId = target.GetInstanceID();
         ChainLightningActivation activation = EnsureActivation(state);
-        if (activation.HitTargetIds.Contains(targetId))
-        {
-            return false;
-        }
-
-        activation.HitTargetIds.Add(targetId);
-        return true;
+        return activation.HitTargetIds.Add(targetId);
     }
 
     internal static void FilterChainLightningCandidate(Aoe aoe, Collider collider, ref bool result)
