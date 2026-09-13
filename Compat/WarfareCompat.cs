@@ -951,8 +951,14 @@ internal static partial class WarfareCompat
             return true;
         }
 
-        character.m_seman.AddStatusEffect("Warfare_Bleeding_Stacking".GetStableHashCode(), resetTime: true, itemLevel, skillLevel: 0f);
-        character.m_seman.RemoveStatusEffect(status, quiet: true);
+        SEMan statusEffects = character.GetSEMan();
+        statusEffects.AddStatusEffect(
+            "Warfare_Bleeding_Stacking".GetStableHashCode(),
+            resetTime: true,
+            itemLevel,
+            skillLevel: 0f,
+            variant: -1);
+        statusEffects.RemoveStatusEffect(status, quiet: true);
         return false;
     }
 
@@ -1609,13 +1615,14 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        Attack? currentAttack = ((Humanoid)Player.m_localPlayer).m_currentAttack;
-        if (currentAttack?.m_weapon?.m_dropPrefab == null)
+        Attack? currentAttack = AttackAccess.GetCurrentAttack(Player.m_localPlayer);
+        ItemDrop.ItemData? weapon = currentAttack?.GetWeapon();
+        if (weapon?.m_dropPrefab == null)
         {
             return false;
         }
 
-        prefabName = currentAttack.m_weapon.m_dropPrefab.name;
+        prefabName = weapon.m_dropPrefab.name;
         return !string.IsNullOrWhiteSpace(prefabName);
     }
 
@@ -1679,8 +1686,8 @@ internal static partial class WarfareCompat
             return false;
         }
 
-        Attack? currentAttack = ((Humanoid)Player.m_localPlayer).m_currentAttack;
-        ItemDrop.ItemData? weapon = currentAttack?.m_weapon;
+        Attack? currentAttack = AttackAccess.GetCurrentAttack(Player.m_localPlayer);
+        ItemDrop.ItemData? weapon = currentAttack?.GetWeapon();
         if (weapon?.m_dropPrefab == null ||
             !string.Equals(weapon.m_dropPrefab.name, prefabName, StringComparison.OrdinalIgnoreCase))
         {

@@ -39,7 +39,7 @@ internal static class JewelcraftingThrowableCompat
             nameof(IsSocketableItemPostfix));
         MethodInfo? updateRecipeListMethod = AccessTools.DeclaredMethod(
             typeof(InventoryGui),
-            nameof(InventoryGui.UpdateRecipeList));
+            "UpdateRecipeList");
         MethodInfo? prepareInventoryPrefixMethod = AccessTools.DeclaredMethod(
             typeof(JewelcraftingThrowableCompat),
             nameof(PrepareInventoryBeforeRecipeListPrefix));
@@ -97,7 +97,7 @@ internal static class JewelcraftingThrowableCompat
             return;
         }
 
-        foreach (ItemDrop.ItemData item in inventory.m_inventory)
+        foreach (ItemDrop.ItemData item in inventory.GetAllItems())
         {
             if (!WarfareThrowableCompat.TryPrepareJewelcraftingSocketableWeapon(item))
             {

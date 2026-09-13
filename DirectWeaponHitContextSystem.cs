@@ -18,13 +18,13 @@ internal static class DirectWeaponHitContextSystem
 
     internal static Scope BeginAttackHit(Attack attack)
     {
-        if (attack?.m_character != Player.m_localPlayer)
+        if (attack == null || AttackAccess.GetCharacter(attack) != Player.m_localPlayer)
         {
             return default;
         }
 
         string previousWeaponPrefabName = _weaponPrefabName;
-        _weaponPrefabName = GetWeaponPrefabName(attack.m_weapon);
+        _weaponPrefabName = GetWeaponPrefabName(attack.GetWeapon());
         _directHitDepth++;
         return new Scope(ScopeKind.DirectHit, previousWeaponPrefabName, _directHitDepth, _characterDamageDepth);
     }
@@ -146,7 +146,7 @@ internal static class DirectWeaponHitContextSystem
     }
 }
 
-[HarmonyPatch(typeof(Attack), nameof(Attack.DoMeleeAttack))]
+[HarmonyPatch(typeof(Attack), "DoMeleeAttack")]
 internal static class AttackDoMeleeAttackDirectWeaponHitPatch
 {
     [HarmonyPriority(Priority.First)]
@@ -169,7 +169,7 @@ internal static class AttackDoMeleeAttackDirectWeaponHitPatch
     }
 }
 
-[HarmonyPatch(typeof(Attack), nameof(Attack.DoAreaAttack))]
+[HarmonyPatch(typeof(Attack), "DoAreaAttack")]
 internal static class AttackDoAreaAttackDirectWeaponHitPatch
 {
     [HarmonyPriority(Priority.First)]

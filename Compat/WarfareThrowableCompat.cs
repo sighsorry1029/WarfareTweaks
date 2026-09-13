@@ -216,7 +216,7 @@ internal static class WarfareThrowableCompat
         Inventory? inventory = Player.m_localPlayer?.GetInventory();
         if (inventory != null)
         {
-            foreach (ItemDrop.ItemData item in inventory.m_inventory)
+            foreach (ItemDrop.ItemData item in inventory.GetAllItems())
             {
                 TryPrepareThrowableUpgradeItem(objectDb, item);
             }
@@ -244,7 +244,7 @@ internal static class WarfareThrowableCompat
             }
         }
 
-        foreach (ItemDrop.ItemData item in inventory.m_inventory)
+        foreach (ItemDrop.ItemData item in inventory.GetAllItems())
         {
             ItemDrop.ItemData.SharedData? sharedData = item?.m_shared;
             if (sharedData == null ||
@@ -259,7 +259,7 @@ internal static class WarfareThrowableCompat
             Recipe? recipe = FindRecipeForItem(objectDb, prefabName, sharedData.m_name);
             if (recipe == null ||
                 player != null &&
-                !player.m_noPlacementCost &&
+                !player.NoCostCheat() &&
                 !player.RequiredCraftingStation(recipe, 1, checkLevel: false))
             {
                 continue;
@@ -278,16 +278,21 @@ internal static class WarfareThrowableCompat
     // Attack and inventory guards preserve throwable durability semantics.
     private static bool TryPrepareAttackForUse(Attack? attack)
     {
-        if (attack?.m_weapon == null || !IsWarfareThrowableWeapon(attack.m_weapon))
+        if (attack == null)
         {
             return false;
         }
 
-        ConfigureWeaponDurability(attack.m_weapon);
+        ItemDrop.ItemData? weapon = attack.GetWeapon();
+        if (weapon == null || !IsWarfareThrowableWeapon(weapon))
+        {
+            return false;
+        }
+
+        ConfigureWeaponDurability(weapon);
         PatchAttack(attack);
         attack.m_consumeItem = false;
-        attack.m_ammoItem = null;
-        attack.m_lastUsedAmmo = null;
+        AttackAccess.ClearAmmoState(attack);
         return true;
     }
 
@@ -374,12 +379,17 @@ internal static class WarfareThrowableCompat
 
     internal static ProjectileDurabilityDrainState CaptureProjectileDurabilityDrain(Attack attack)
     {
-        if (attack?.m_character is not Player || !TryPrepareAttackForUse(attack))
+        if (attack == null || AttackAccess.GetCharacter(attack) is not Player || !TryPrepareAttackForUse(attack))
         {
             return ProjectileDurabilityDrainState.Empty;
         }
 
-        ItemDrop.ItemData weapon = attack.m_weapon;
+        ItemDrop.ItemData? weapon = attack.GetWeapon();
+        if (weapon == null)
+        {
+            return ProjectileDurabilityDrainState.Empty;
+        }
+
         return new ProjectileDurabilityDrainState(weapon, weapon.m_durability);
     }
 
@@ -396,7 +406,9 @@ internal static class WarfareThrowableCompat
             return;
         }
 
-        weapon.m_durability = Mathf.Max(0f, weapon.m_durability - GetDurabilityDrain(weapon));
+        weapon.m_durability = Mathf.Max(
+            0f,
+            weapon.m_durability - GetDurabilityDrain(weapon) * Game.m_durabilityRate);
     }
 
     // Prefab mutation helpers are shared by ObjectDB setup and runtime attack repair.

@@ -149,9 +149,10 @@ internal static class WarfareSkillCompat
         ref float projVelocity,
         ref float projectileAccuracy)
     {
-        if (a?.m_character != Player.m_localPlayer ||
+        if (a == null ||
+            AttackAccess.GetCharacter(a) != Player.m_localPlayer ||
             hit == null ||
-            !WarfareThrowableCompat.IsWarfareThrowableWeapon(a.m_weapon))
+            !WarfareThrowableCompat.IsWarfareThrowableWeapon(a.GetWeapon()))
         {
             return true;
         }

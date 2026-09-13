@@ -14,6 +14,10 @@ namespace LocalizationManager;
 internal static class Localizer
 {
     private static readonly string[] FileExtensions = { ".json", ".yml" };
+    private static readonly MethodInfo? AddWordMethod = AccessTools.DeclaredMethod(
+        typeof(Localization),
+        "AddWord",
+        new[] { typeof(string), typeof(string) });
     private static BaseUnityPlugin? _plugin;
 
     private static BaseUnityPlugin Plugin =>
@@ -27,7 +31,7 @@ internal static class Localizer
             AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage)),
             postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalization))));
         harmony.Patch(
-            AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.SetupGui)),
+            AccessTools.DeclaredMethod(typeof(FejdStartup), "SetupGui"),
             postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalizationLater))));
 
         if (Localization.instance != null)
@@ -89,9 +93,15 @@ internal static class Localizer
             }
         }
 
+        if (AddWordMethod == null)
+        {
+            Debug.LogError($"Localization.AddWord(string, string) was not found for mod {Plugin.Info.Metadata.Name}.");
+            return;
+        }
+
         foreach (KeyValuePair<string, string> text in localizationTexts)
         {
-            localization.AddWord(text.Key, text.Value);
+            AddWordMethod.Invoke(localization, new object[] { text.Key, text.Value });
         }
     }
 

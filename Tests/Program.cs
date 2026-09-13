@@ -184,7 +184,60 @@ namespace WarfareTweaks.Tests
                 Check(method != null, "Humanoid.DrainEquipedItemDurability(ItemData, float) was not found.");
                 Equal(typeof(void), method!.ReturnType);
             });
+            Run("metadata: Valheim 1.0 tooltip and status-effect signatures exist", () =>
+            {
+                Assembly valheim = Assembly.Load("assembly_valheim");
+                Type itemType = valheim.GetType("ItemDrop+ItemData", true)!;
+                MethodInfo? tooltip = itemType.GetMethod(
+                    "GetTooltip",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    types: new[] { itemType, typeof(int), typeof(bool), typeof(float), typeof(int), typeof(bool) },
+                    modifiers: null);
+                Check(tooltip != null, "ItemData.GetTooltip(ItemData, int, bool, float, int, bool) was not found.");
+
+                MethodInfo? addStatusEffect = valheim.GetType("SEMan", true)!.GetMethod(
+                    "AddStatusEffect",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    types: new[] { typeof(int), typeof(bool), typeof(int), typeof(float), typeof(short) },
+                    modifiers: null);
+                Check(addStatusEffect != null, "SEMan.AddStatusEffect(int, bool, int, float, short) was not found.");
+            });
+            Run("runtime: projectile durability fallback honors the world durability rate", TestProjectileDurabilityRate);
             Run("runtime: broken-removal scope protects only its exact inventory and item", TestBrokenRemovalScope);
+        }
+
+        private static void TestProjectileDurabilityRate()
+        {
+            Assembly valheim = Assembly.Load("assembly_valheim");
+            Type itemType = valheim.GetType("ItemDrop+ItemData", true)!;
+            object item = MakeThrowable(itemType);
+            object shared = itemType.GetField("m_shared")!.GetValue(item)!;
+            shared.GetType().GetField("m_useDurabilityDrain")!.SetValue(shared, 2f);
+            itemType.GetField("m_durability")!.SetValue(item, 10f);
+
+            Type stateType = RuntimeType("WarfareThrowableCompat").GetNestedType(
+                "ProjectileDurabilityDrainState",
+                BindingFlags.NonPublic)!;
+            object state = Activator.CreateInstance(
+                stateType,
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                args: new[] { item, (object)10f },
+                culture: null)!;
+            FieldInfo rateField = valheim.GetType("Game", true)!.GetField("m_durabilityRate")!;
+            object? previousRate = rateField.GetValue(null);
+            try
+            {
+                rateField.SetValue(null, 0.25f);
+                Invoke("WarfareThrowableCompat", "ApplyMissingProjectileDurabilityDrain", state);
+                Equal(9.5f, itemType.GetField("m_durability")!.GetValue(item));
+            }
+            finally
+            {
+                rateField.SetValue(null, previousRate);
+            }
         }
 
         private static void TestBrokenRemovalScope()
@@ -257,11 +310,8 @@ namespace WarfareTweaks.Tests
         private static Assembly? ResolveRuntimeDependency(object? sender, ResolveEventArgs args)
         {
             string name = new AssemblyName(args.Name).Name!;
-            foreach (string file in new[] { name + ".dll", name + "_publicized.dll" })
-            {
-                string path = Path.Combine(_runtimeDirectory, file);
-                if (File.Exists(path)) return Assembly.LoadFrom(path);
-            }
+            string path = Path.Combine(_runtimeDirectory, name + ".dll");
+            if (File.Exists(path)) return Assembly.LoadFrom(path);
             return null;
         }
 

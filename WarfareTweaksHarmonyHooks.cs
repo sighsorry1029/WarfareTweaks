@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace WarfareTweaks;
 
-[HarmonyPatch(typeof(FejdStartup), nameof(FejdStartup.Awake))]
+[HarmonyPatch(typeof(FejdStartup), "Awake")]
 internal static class FejdStartupAwakeWarfareItemManagerSyncCompatPatch
 {
     [HarmonyPriority(Priority.Last)]
@@ -15,7 +15,7 @@ internal static class FejdStartupAwakeWarfareItemManagerSyncCompatPatch
     }
 }
 
-[HarmonyPatch(typeof(ObjectDB), nameof(ObjectDB.Awake))]
+[HarmonyPatch(typeof(ObjectDB), "Awake")]
 internal static class ObjectDbAwakeWarfareTweaksPatch
 {
     private static void Postfix(ObjectDB __instance)
@@ -34,7 +34,7 @@ internal static class ObjectDbCopyOtherDbWarfareTweaksPatch
     }
 }
 
-[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
+[HarmonyPatch(typeof(ZNetScene), "Awake")]
 [HarmonyAfter(WarfareTweaksCompat.WarfareFireAndIceGuid)]
 internal static class ZNetSceneAwakeWarfareTweaksPatch
 {
@@ -55,7 +55,7 @@ internal static class SeManApplyStatusEffectSpeedModsWarfareEffectsPatch
     }
 }
 
-[HarmonyPatch(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.GetTooltip), new[] { typeof(ItemDrop.ItemData), typeof(int), typeof(bool), typeof(float), typeof(int) })]
+[HarmonyPatch(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.GetTooltip), new[] { typeof(ItemDrop.ItemData), typeof(int), typeof(bool), typeof(float), typeof(int), typeof(bool) })]
 internal static class ItemDataGetTooltipWarfareTweaksFallbackTooltipPatch
 {
     [HarmonyPriority(Priority.Last)]
@@ -177,7 +177,7 @@ internal static class WearNTearDamageWarfareThrowablePatch
     }
 }
 
-[HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRecipeList), new[] { typeof(List<Recipe>) })]
+[HarmonyPatch(typeof(InventoryGui), "UpdateRecipeList", new[] { typeof(List<Recipe>) })]
 internal static class InventoryGuiUpdateRecipeListWarfareThrowableUpgradePatch
 {
     [HarmonyPriority(Priority.First)]

@@ -17,7 +17,7 @@ namespace WarfareTweaks;
 public sealed class WarfareTweaksPlugin : BaseUnityPlugin
 {
     internal const string ModName = "WarfareTweaks";
-    internal const string ModVersion = "1.0.4";
+    internal const string ModVersion = "1.0.5";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string WarfareYamlFileName = "WarfareTweaks.yml";

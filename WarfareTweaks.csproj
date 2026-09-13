@@ -59,7 +59,6 @@
         <BepInExPath Condition="!Exists('$(BepInExPath)')AND Exists('$(GamePath)')">$(GamePath)\BepInEx</BepInExPath>
         <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
         <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\unstripped_corlib</CorlibPath>
-        <PublicizedAssembliesPath Condition="!Exists('$(PublicizedAssembliesPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
         <AfterTargets Condition="'$(AfterTargets)' == ''">ILRepacker</AfterTargets>
       </PropertyGroup>
     </When>
@@ -75,7 +74,7 @@
       <HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\assembly_googleanalytics.dll</HintPath>
     </Reference>
     <Reference Include="assembly_guiutils">
-      <HintPath>$(PublicizedAssembliesPath)\assembly_guiutils_publicized.dll</HintPath>
+      <HintPath>$(CorlibPath)\assembly_guiutils.dll</HintPath>
     </Reference>
     <Reference Include="assembly_lux">
       <HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\assembly_lux.dll</HintPath>
@@ -90,10 +89,10 @@
       <HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\assembly_sunshafts.dll</HintPath>
     </Reference>
     <Reference Include="assembly_utils">
-      <HintPath>$(PublicizedAssembliesPath)\assembly_utils_publicized.dll</HintPath>
+      <HintPath>$(CorlibPath)\assembly_utils.dll</HintPath>
     </Reference>
     <Reference Include="assembly_valheim">
-      <HintPath>$(PublicizedAssembliesPath)\assembly_valheim_publicized.dll</HintPath>
+      <HintPath>$(CorlibPath)\assembly_valheim.dll</HintPath>
     </Reference>
     <Reference Include="BepInEx">
       <HintPath>$(BepInExPath)\core\BepInEx.dll</HintPath>
@@ -547,6 +546,7 @@
     <RemoveDir Directories="$(NexusPackageDir)" />
   </Target>
   <ItemGroup>
+    <Compile Include="AttackAccess.cs" />
     <Compile Include="ChainLightningDedupSystem.cs" />
     <Compile Include="DirectWeaponHitContextSystem.cs" />
     <Compile Include="LocalizationManager.cs" />
